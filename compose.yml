@@ -27,10 +27,14 @@ services:
     environment:
       # Bare hostname => Caddy runs ACME auto-HTTPS; unset => http://localhost:8080.
       - DOMAIN=${DOMAIN:-}
+      # production => Swagger off + Secure session cookie (needs DOMAIN/HTTPS);
+      # unset => development, so the localhost plain-HTTP trial can log in.
+      - APP_ENV=${APP_ENV:-}
       - APP_PASSWORD=${APP_PASSWORD:-}            # optional pre-seed
       - SECRET_KEY=${SECRET_KEY:-}                # optional; auto-gen if unset
       - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
       - BACKUP_DEST=${BACKUP_DEST:-}              # off-host opt-in
+      - BACKUP_RETAIN_DAYS=${BACKUP_RETAIN_DAYS:-30}
       - BACKUP_DIR=/backups
       # Env-based rclone for the off-host remote. Use an alnum/underscore
       # remote name (dots/dashes break the env-var mapping), then point

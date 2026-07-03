@@ -55,12 +55,13 @@ Configuration is driven by environment variables, set in a `.env` file next to `
 | Variable | Purpose |
 |----------|---------|
 | `DOMAIN` | Your public hostname. Set it to enable automatic HTTPS. Leave unset for local HTTP on port 8080. |
+| `APP_ENV` | Set to `production` on internet-facing installs: disables Swagger docs and makes the session cookie HTTPS-only. Leave unset for a local plain-HTTP trial. |
 | `APP_PASSWORD` | Optional pre-seeded login password. If unset, you set the password on first run. |
 | `SECRET_KEY` | Session-signing key. Auto-generated if left unset. |
 | `BACKUP_ENCRYPTION_KEY` | Encryption key for backup artifacts. |
 | `BACKUP_DEST` | Optional off-host backup destination (for example an S3-compatible bucket via rclone). |
 
-See `.env.example` for the full annotated list, including the rclone settings used for off-host backups.
+Pricing API keys (Finnhub, CoinGecko) are not environment variables — configure them in-app under Settings after logging in. See `.env.example` for the full annotated list, including the rclone settings used for off-host backups.
 
 ## License
 
