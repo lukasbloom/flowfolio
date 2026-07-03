@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,11 +22,25 @@ class Settings(BaseSettings):
     # in production by assert_production_safety.
     app_password: str | None = None
 
+    # The public hostname Caddy serves HTTPS for (same DOMAIN env the compose
+    # stack hands to Caddy). Only read here to derive app_env below.
+    domain: str | None = None
+
     # APP_ENV gates production-only behaviour:
     # - "production": Swagger /api/docs and /api/openapi.json are disabled,
     #                 cookies are sent with `secure=True` (HTTPS-only via Caddy)
-    # - "development" (default): Swagger enabled, cookies allow plain HTTP
-    app_env: str = "development"
+    # - "development": Swagger enabled, cookies allow plain HTTP
+    # Unset derives from DOMAIN: a domain means HTTPS is live, so production
+    # hardening switches on without a second variable. An explicit value always
+    # wins (e.g. APP_ENV=production behind an external TLS proxy with no DOMAIN,
+    # or APP_ENV=development to debug Swagger on a domain install).
+    app_env: str = ""
+
+    @model_validator(mode="after")
+    def _derive_app_env(self) -> "Settings":
+        if not self.app_env:
+            self.app_env = "production" if self.domain else "development"
+        return self
 
     # Clock pin for snapshot test runs. In production both stay
     # at their default; compose.test.yml sets these for the hermetic suite.
