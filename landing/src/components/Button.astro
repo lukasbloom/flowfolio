@@ -1,0 +1,76 @@
+---
+// Button, two variants only: `primary` (brand gradient fill, white
+// 700 label) and `secondary` (slate outline/ghost). No third variant.
+// Polymorphic: renders <a> when `href` is set, otherwise <button>.
+interface Props {
+  variant?: "primary" | "secondary";
+  href?: string;
+  type?: "button" | "submit";
+  class?: string;
+  [key: string]: unknown;
+}
+
+const {
+  variant = "primary",
+  href,
+  type = "button",
+  class: extra = "",
+  ...rest
+} = Astro.props;
+
+const Tag = href ? "a" : "button";
+const tagProps = href ? { href } : { type };
+---
+
+<Tag class:list={["btn", `btn--${variant}`, extra]} {...tagProps} {...rest}>
+  <slot />
+</Tag>
+
+<style>
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-sm);
+    min-height: var(--tap-min);
+    min-width: var(--tap-min);
+    padding: 0 var(--space-lg);
+    border-radius: var(--radius-button);
+    font-family: var(--font-sans);
+    font-size: var(--text-body-sm);
+    font-weight: var(--weight-bold);
+    line-height: 1;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition:
+      transform 120ms ease,
+      filter 120ms ease,
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .btn:active {
+    transform: translateY(1px);
+  }
+
+  /* primary — the single gradient CTA per viewport, white 700 label */
+  .btn--primary {
+    background: var(--color-accent); /* solid fallback */
+    background-image: var(--brand-gradient);
+    color: var(--color-on-ink);
+  }
+  .btn--primary:hover {
+    filter: brightness(1.05);
+  }
+
+  /* secondary — slate outline/ghost, never gradient */
+  .btn--secondary {
+    background: transparent;
+    color: var(--color-ink);
+    border-color: var(--color-ink);
+  }
+  .btn--secondary:hover {
+    background: var(--color-ink);
+    color: var(--color-on-ink);
+  }
+</style>

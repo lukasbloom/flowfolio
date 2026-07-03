@@ -1,0 +1,97 @@
+---
+// Header — sticky, slate-on-white, hairline bottom border. Logo wordmark left;
+// Demo + GitHub text links + a compact CTA right. On mobile the "Demo" text
+// link drops, leaving logo + GitHub + compact CTA. Zero JS (no drawer).
+import githubIcon from "lucide-static/icons/github.svg?raw";
+import Button from "./Button.astro";
+
+interface Props {
+  demoHref?: string;
+  githubHref?: string;
+}
+const {
+  demoHref = "#",
+  githubHref = "https://github.com/lukasbloom/flowfolio",
+} = Astro.props;
+---
+
+<header class="header">
+  <div class="container header__bar">
+    <a class="header__logo" href="/" aria-label="Flowfolio home">
+      <img src="/logo_text.png" alt="Flowfolio" width="140" height="47" />
+    </a>
+
+    <nav class="header__nav" aria-label="Primary">
+      <a class="header__link header__link--demo" href={demoHref}>Demo</a>
+      <a
+        class="header__link"
+        href={githubHref}
+        rel="noopener"
+        aria-label="View on GitHub"
+      >
+        <span class="header__icon" aria-hidden="true" set:html={githubIcon} />
+        <span class="header__link-label">GitHub</span>
+      </a>
+      <Button variant="primary" href={demoHref} class="header__cta">
+        Try the demo
+      </Button>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: color-mix(in srgb, var(--color-bg) 88%, transparent);
+    backdrop-filter: saturate(180%) blur(8px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .header__bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 64px;
+    gap: var(--space-md);
+  }
+  .header__logo img {
+    width: 140px;
+    height: auto;
+  }
+  .header__nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-lg);
+  }
+  .header__link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    min-height: var(--tap-min);
+    font-size: var(--text-body-sm);
+    font-weight: var(--weight-bold);
+    color: var(--color-ink);
+    transition: color 120ms ease;
+  }
+  .header__link:hover {
+    color: var(--color-accent);
+  }
+  .header__icon :global(svg) {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* mobile: drop the Demo text link; keep logo + GitHub + compact CTA */
+  @media (max-width: 639px) {
+    .header__link--demo {
+      display: none;
+    }
+    .header__link-label {
+      display: none;
+    }
+    .header__nav {
+      gap: var(--space-md);
+    }
+  }
+</style>

@@ -1,0 +1,72 @@
+# Development overlay — hot reload for frontend + backend.
+#
+# Usage (the base is compose.multi.yml now, NOT the top-level compose.yml — the
+# top-level file is the single-image dist artifact):
+#   docker compose -f compose.multi.yml -f compose.dev.yml up
+#
+# This swaps the prod web image for `node:22-alpine` running `next dev` against
+# the bind-mounted source, and overrides the api command to use `uvicorn --reload`.
+# Caddy + the SQLite volume + the backup service inherit from compose.multi.yml
+# unchanged. The volume lists below use `!override` (not `!reset`) so the new
+# mounts replace the inherited list instead of being silently dropped.
+
+services:
+  api:
+    # Reuse the image built from ./backend (system-installed deps), but bind-mount
+    # the source so file edits are visible to the running container.
+    # Override the prod volumes list to drop the .env-as-file mount (it would
+    # land at backend/.env after the ./backend:/app bind shadows it). Load env
+    # vars via env_file instead so the same .env at the repo root is honored.
+    volumes: !override
+      - ./backend:/app
+      - db_data:/data
+    env_file:
+      - ./.env
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+    # uvicorn --reload spawns a worker process and recreates it on each save.
+    # Healthcheck would flap during reloads — relax start_period and bump
+    # retries so transient restarts don't trigger Caddy backoff.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  web:
+    image: node:22-alpine
+    # Override the prod build entirely. `npm install` runs on first boot so a
+    # fresh clone bootstraps without a host-side install step; the
+    # web_node_modules named volume persists deps across `compose down`.
+    build: !reset null
+    working_dir: /app
+    volumes: !override
+      - ./frontend:/app
+      # Named volume on /app/node_modules prevents the host bind-mount above
+      # from clobbering whatever node:22-alpine installs inside the container
+      # (host node_modules may have macOS-native binaries that don't run on
+      # alpine, or may be absent entirely on a fresh clone).
+      - web_node_modules:/app/node_modules
+      # Same trick for the Next dev cache — keep it inside the container,
+      # bind-mounting it to macOS would tank rebuild speed.
+      - web_next_cache:/app/.next
+    command:
+      - sh
+      - -c
+      - "npm install && npm run dev -- --hostname 0.0.0.0 --port 3000"
+    # Drop the prod healthcheck dependency so frontend iteration isn't blocked
+    # on api boot (Caddy will retry the proxy as web warms up).
+    depends_on: !reset []
+
+volumes:
+  web_node_modules:
+  web_next_cache:

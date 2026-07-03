@@ -1,0 +1,117 @@
+---
+// Hero — eyebrow + Display headline (accent-underlined keyword) + 18px lead
+// subhead + CTA cluster + a framed hero screenshot of the Compare surface, over
+// a low-opacity wave-F brand motif. The hero shot loads eager + high priority
+// (zero CLS); it is the one above-the-fold screenshot.
+import type { ImageMetadata } from "astro";
+import Eyebrow from "./Eyebrow.astro";
+import Button from "./Button.astro";
+import ScreenshotFrame from "./ScreenshotFrame.astro";
+
+interface Props {
+  image: ImageMetadata; // Compare/performance shot
+  demoHref: string; // primary CTA — resolved demo URL
+  githubHref: string; // secondary CTA — repo
+}
+const { image, demoHref, githubHref } = Astro.props;
+---
+
+<section class="hero">
+  <img class="hero__motif" src="/logo.png" alt="" aria-hidden="true" />
+  <div class="container hero__inner">
+    <Eyebrow>Self-hosted portfolio tracker</Eyebrow>
+    <h1 class="hero__headline">
+      Track every holding.
+      <span class="hero__accent">Know what's actually working</span>.
+    </h1>
+    <p class="hero__lead">
+      Flowfolio compares the real return of every stock, fund, and coin you own,
+      across any timeframe &mdash; so you can see which investments actually earn
+      their keep. It runs on your own server, and your financial data never
+      leaves it.
+    </p>
+
+    <div class="hero__cta">
+      <Button variant="primary" href={demoHref}>Try the live demo</Button>
+      <Button variant="secondary" href={githubHref} rel="noopener">
+        View on GitHub
+      </Button>
+    </div>
+
+    <div class="hero__shot">
+      <ScreenshotFrame
+        image={image}
+        alt="Flowfolio compare view: every holding ranked by total return and time-weighted return"
+        ratio="1232 / 900"
+        loading="eager"
+        fetchpriority="high"
+        widths={[640, 960, 1232]}
+        sizes="(max-width: 1024px) 92vw, 1040px"
+      />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero {
+    position: relative;
+    overflow: hidden;
+    padding-block: var(--space-5xl) var(--space-4xl);
+    background: var(--color-bg);
+  }
+  /* Oversized, low-opacity wave-F mark behind the hero (brand motif). */
+  .hero__motif {
+    position: absolute;
+    top: -8%;
+    right: -6%;
+    width: min(620px, 70vw);
+    height: auto;
+    opacity: 0.05;
+    pointer-events: none;
+    user-select: none;
+  }
+  .hero__inner {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hero__headline {
+    margin-top: var(--space-lg);
+    max-width: 18ch;
+    font-size: var(--text-display);
+    line-height: var(--leading-display);
+  }
+  /* gradient underline on the highlighted keyword — the flow-wave motif */
+  .hero__accent {
+    background-image: var(--brand-gradient);
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    background-size: 100% 0.12em;
+    padding-bottom: 0.04em;
+  }
+  .hero__lead {
+    margin-top: var(--space-lg);
+    max-width: 60ch;
+    font-size: var(--text-body);
+    line-height: var(--leading-body);
+    color: var(--color-muted);
+  }
+  .hero__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-md);
+    margin-top: var(--space-xl);
+  }
+  .hero__shot {
+    width: 100%;
+    margin-top: var(--space-3xl);
+  }
+
+  @media (min-width: 1024px) {
+    .hero__shot {
+      margin-top: var(--space-4xl);
+    }
+  }
+</style>

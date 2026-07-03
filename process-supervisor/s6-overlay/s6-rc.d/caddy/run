@@ -1,0 +1,15 @@
+#!/command/with-contenv sh
+# Caddy reverse proxy. `with-contenv` imports the container environment so the
+# DOMAIN env-switch is visible (S6_KEEP_ENV=1 also preserves env for the other
+# services; Caddy needs the explicit import to evaluate {$DOMAIN} below).
+#
+# DOMAIN normalisation: compose.yml passes `DOMAIN=${DOMAIN:-}`, i.e. an EMPTY
+# (but set) string when the host has no DOMAIN. Caddy's `{$DOMAIN:default}`
+# substitution only falls back to the default when the var is UNSET, not when
+# it is empty — an empty value collapses the site-address line and breaks the
+# Caddyfile (the `header` block then parses as a global option). So we UNSET an
+# empty DOMAIN here, letting `{$DOMAIN:http://localhost:8080}` take its default.
+if [ -z "${DOMAIN:-}" ]; then
+    unset DOMAIN
+fi
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile

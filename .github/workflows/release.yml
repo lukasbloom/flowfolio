@@ -1,0 +1,72 @@
+name: Release
+
+# Tag-triggered release pipeline: on a semver tag push it
+# builds a multi-arch image, publishes it to ghcr, and cuts a GitHub Release so
+# the in-app update check has a published release to read.
+on:
+  push:
+    tags:
+      - "v*.*.*" # semver only (vMAJOR.MINOR.PATCH)
+
+# Least privilege: the built-in GITHUB_TOKEN, no long-lived PAT.
+# contents:write creates the Release; packages:write pushes to ghcr.
+permissions:
+  contents: write
+  packages: write
+
+env:
+  # Single source of truth for the image ref — a fork overrides the owner here.
+  IMAGE: ghcr.io/lukasbloom/flowfolio
+
+jobs:
+  test:
+    name: Backend tests (publish gate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/uv.lock"
+      - name: Install
+        run: uv sync --extra dev
+      - name: Pytest
+        run: uv run python -m pytest -q
+
+  publish:
+    name: Build, push, release
+    # A red test blocks the release, never publish an untested image.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # QEMU enables the linux/arm64 leg under emulation on the amd64 runner.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # APP_VERSION provenance is the pushed tag only, never external input.
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.ref_name }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Auto-generated notes give the in-app update check a body + notes URL to surface.
+          generate_release_notes: true

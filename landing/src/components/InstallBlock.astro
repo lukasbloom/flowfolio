@@ -1,0 +1,115 @@
+---
+// InstallBlock — single-line, copy-paste-ready install command in a slate frame.
+// The "Copy" button writes to the clipboard and swaps to "Copied!" for ~1.5s.
+// This is the ONLY client JS on the page. With JS off the <code>
+// stays manually selectable.
+import copyIcon from "lucide-static/icons/copy.svg?raw";
+
+interface Props {
+  command?: string;
+}
+const {
+  command = "docker run -d -p 8080:8080 -v flowfolio:/data ghcr.io/lukasbloom/flowfolio:latest",
+} = Astro.props;
+---
+
+<div class="install" data-install-block>
+  <code class="install__cmd" data-install-cmd>{command}</code>
+  <button
+    class="install__copy"
+    type="button"
+    data-install-copy
+    data-command={command}
+    aria-label="Copy install command"
+  >
+    <span class="install__icon" aria-hidden="true" set:html={copyIcon} />
+    <span data-copy-label>Copy</span>
+  </button>
+</div>
+
+<script>
+  // Progressive enhancement — clipboard + transient "Copied!" label.
+  const COPIED_MS = 1500;
+  document.querySelectorAll<HTMLButtonElement>("[data-install-copy]").forEach(
+    (btn) => {
+      const label = btn.querySelector<HTMLElement>("[data-copy-label]");
+      const command = btn.dataset.command ?? "";
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(command);
+          if (label) {
+            const prev = label.textContent;
+            label.textContent = "Copied!";
+            btn.classList.add("is-copied");
+            window.setTimeout(() => {
+              label.textContent = prev;
+              btn.classList.remove("is-copied");
+            }, COPIED_MS);
+          }
+        } catch {
+          /* clipboard blocked — the <code> remains manually selectable */
+        }
+      });
+    },
+  );
+</script>
+
+<style>
+  .install {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    justify-content: space-between;
+    background: var(--color-ink);
+    color: var(--color-on-ink);
+    border: 1px solid var(--color-border-ink);
+    border-radius: var(--radius-card);
+    padding: var(--space-md) var(--space-lg);
+    box-shadow: var(--shadow-card);
+  }
+  .install__cmd {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+    font-size: var(--text-body-sm);
+    white-space: nowrap;
+    overflow-x: auto;
+    user-select: all;
+  }
+  .install__copy {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    min-height: var(--tap-min);
+    flex-shrink: 0;
+    padding: 0 var(--space-md);
+    border-radius: var(--radius-button);
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-on-ink);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    font-weight: var(--weight-bold);
+    font-size: var(--text-body-sm);
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+  .install__copy:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+  .install__copy.is-copied {
+    background: var(--color-accent);
+    background-image: var(--brand-gradient);
+    border-color: transparent;
+  }
+  .install__icon :global(svg) {
+    width: 16px;
+    height: 16px;
+  }
+
+  @media (max-width: 639px) {
+    .install {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .install__copy {
+      justify-content: center;
+    }
+  }
+</style>

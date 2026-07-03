@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Alembic
+alembic/versions/*.py
+!alembic/versions/.gitkeep
+
+# Node
+node_modules/
+.next/
+out/
+
+# Cloudflare Wrangler local state (Pages/Workers)
+.wrangler/
+
+# Playwright e2e artifacts (traces/screenshots/videos can capture a test session)
+frontend/test-results/
+frontend/playwright-report/
+frontend/tests/e2e/.auth/
+# Next.js regenerates these; the path flaps between dev and prod modes
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
+# Environment
+.env
+*.env.local
+
+# SQLite
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+# Synthetic golden fixture, committed intentionally
+!tests/fixtures/golden.sqlite
+
+# Docker
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db

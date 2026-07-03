@@ -1,0 +1,404 @@
+<div data-testid="allocation-drill" class="max-h-[70vh] overflow-y-auto -mx-6 px-6 -mb-6 pb-6 [&amp;::-webkit-scrollbar]:w-2 [&amp;::-webkit-scrollbar-thumb]:rounded-full [&amp;::-webkit-scrollbar-thumb]:bg-border [&amp;::-webkit-scrollbar-track]:bg-muted/30 [scrollbar-width:thin]">
+  <div class="hidden md:block">
+    <div data-slot="table-container" class="relative w-full overflow-x-auto">
+      <table data-slot="table" class="w-full caption-bottom text-sm">
+        <thead data-slot="table-header" class="[&amp;_tr]:border-b">
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <th data-slot="table-head" class="h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium" aria-pressed="false">
+                <span>Instrument</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="false">
+                <span>Qty</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="false">
+                <span>Avg cost</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="false">
+                <span>Current price</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="false">
+                <span>% return</span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="false">
+                <span>
+                  <span data-state="closed" data-slot="tooltip-trigger">Realized</span>
+                </span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-up-down size-3 text-muted-foreground opacity-0 group-hover/header:opacity-100" aria-hidden="true">
+                  <path d="m21 16-4 4-4-4"></path>
+                  <path d="M17 20V4"></path>
+                  <path d="m3 8 4-4 4 4"></path>
+                  <path d="M7 4v16"></path>
+                </svg>
+              </button>
+            </th>
+            <th data-slot="table-head" class="h-10 px-2 align-middle font-medium whitespace-nowrap text-foreground [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <button type="button" class="group/header inline-flex w-full items-center gap-1 text-xs font-medium justify-end" aria-pressed="true">
+                <span>
+                  <span data-state="closed" data-slot="tooltip-trigger">TWRR (annualized)</span>
+                </span>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-arrow-down size-3 text-foreground" aria-hidden="true">
+                  <path d="M12 5v14"></path>
+                  <path d="m19 12-7 7-7-7"></path>
+                </svg>
+              </button>
+            </th>
+          </tr>
+        </thead>
+        <tbody data-slot="table-body" class="[&amp;_tr:last-child]:border-0">
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/b33d71bf-2ce4-5b15-906d-7411c701fdb4">SOL</a>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">Solana</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">16.14</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">€112.34</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="tabular-nums">€182.81</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+62.72%</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €217.68</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+48.28%</span>
+            </td>
+          </tr>
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/0b22090b-4d12-5f80-ba29-7cc1c3d47ab6">BTC</a>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">Bitcoin</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">0.047</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">€54,269.01</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="tabular-nums">€66,746.02</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+22.99%</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €211.84</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+26.61%</span>
+            </td>
+          </tr>
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/f79edd0d-e90d-5ac3-9553-665da63e8fc8">ETH</a>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">Ethereum</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">2.29585</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">€2,577.04</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="tabular-nums">€3,273.53</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+27.03%</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-muted-foreground" data-state="closed" data-slot="tooltip-trigger">€0.00</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+24.19%</span>
+            </td>
+          </tr>
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/8748512a-0fcc-57cd-bc23-5f87ff5e2425">TRX</a>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">TRON</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">5,000</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">€0.10</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="tabular-nums">€0.11</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+11.91%</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-muted-foreground" data-state="closed" data-slot="tooltip-trigger">€0.00</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive">+20.00%</span>
+            </td>
+          </tr>
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted text-muted-foreground">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/5bd36170-1c45-5633-9d6b-1f896b4ea9cc">XRP</a>
+              <span data-slot="badge" data-variant="secondary" class="inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&amp;&gt;svg]:pointer-events-none [&amp;&gt;svg]:size-3 bg-secondary text-secondary-foreground [a&amp;]:hover:bg-secondary/90 ml-2">Closed</span>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">XRP</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">0</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">—</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="text-muted-foreground tabular-nums">—</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="text-muted-foreground tabular-nums">—</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €4.88</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="cursor-help text-muted-foreground tabular-nums" aria-label="TWRR needs at least 7 days of data within the selected timeframe." data-state="closed" data-slot="tooltip-trigger">—</span>
+            </td>
+          </tr>
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted text-muted-foreground">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px]">
+              <a class="font-semibold hover:underline" href="/holdings/i/359a54f0-ec9f-581f-8bf7-7f521e19e5cc">ADA</a>
+              <span data-slot="badge" data-variant="secondary" class="inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&amp;&gt;svg]:pointer-events-none [&amp;&gt;svg]:size-3 bg-secondary text-secondary-foreground [a&amp;]:hover:bg-secondary/90 ml-2">Closed</span>
+              <div class="max-w-[18rem] truncate text-xs text-muted-foreground">Cardano</div>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">0</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">—</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">
+              <span class="text-muted-foreground tabular-nums">—</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="text-muted-foreground tabular-nums">—</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-negative" data-state="closed" data-slot="tooltip-trigger">− €337.27</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="cursor-help text-muted-foreground tabular-nums" aria-label="TWRR needs at least 7 days of data within the selected timeframe." data-state="closed" data-slot="tooltip-trigger">—</span>
+            </td>
+          </tr>
+        </tbody>
+        <tfoot data-slot="table-footer" class="border-t bg-muted/50 font-medium [&amp;&gt;tr]:last:border-b-0">
+          <tr data-slot="table-row" class="border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted">
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] font-semibold">Total</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums text-muted-foreground">—</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">—</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums">€14,164.29</td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="text-muted-foreground">—</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right">
+              <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €97.13</span>
+            </td>
+            <td data-slot="table-cell" class="p-2 align-middle whitespace-nowrap [&amp;:has([role=checkbox])]:pr-0 [&amp;&gt;[role=checkbox]]:translate-y-[2px] text-right tabular-nums text-muted-foreground">—</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+  <div class="space-y-3 md:hidden">
+    <label class="block text-xs font-medium text-muted-foreground" for="perf-mobile-sort">Sort</label>
+    <select id="perf-mobile-sort" class="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm">
+      <option value="twrr:desc">Sort: TWRR ↓</option>
+      <option value="twrr:asc">Sort: TWRR ↑</option>
+      <option value="percent_return:desc">Sort: % return ↓</option>
+      <option value="realized:desc">Sort: Realized ↓</option>
+      <option value="avg_cost:desc">Sort: Avg cost ↓</option>
+      <option value="instrument:asc">Sort: Name A-Z</option>
+    </select>
+    <div class="rounded-lg border border-border bg-card p-4">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/b33d71bf-2ce4-5b15-906d-7411c701fdb4">SOL</a>
+        </div>
+        <span class="tabular-nums text-positive shrink-0">+62.72%</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">Solana</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">16.14</span>
+        <span>@</span>
+        <span class="tabular-nums">€112.34</span>
+        <span>→</span>
+        <span class="tabular-nums">€182.81</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €217.68</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="tabular-nums text-positive">+48.28%</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-card p-4">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/0b22090b-4d12-5f80-ba29-7cc1c3d47ab6">BTC</a>
+        </div>
+        <span class="tabular-nums text-positive shrink-0">+22.99%</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">Bitcoin</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">0.047</span>
+        <span>@</span>
+        <span class="tabular-nums">€54,269.01</span>
+        <span>→</span>
+        <span class="tabular-nums">€66,746.02</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €211.84</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="tabular-nums text-positive">+26.61%</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-card p-4">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/f79edd0d-e90d-5ac3-9553-665da63e8fc8">ETH</a>
+        </div>
+        <span class="tabular-nums text-positive shrink-0">+27.03%</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">Ethereum</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">2.29585</span>
+        <span>@</span>
+        <span class="tabular-nums">€2,577.04</span>
+        <span>→</span>
+        <span class="tabular-nums">€3,273.53</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-muted-foreground" data-state="closed" data-slot="tooltip-trigger">€0.00</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="tabular-nums text-positive">+24.19%</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-card p-4">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/8748512a-0fcc-57cd-bc23-5f87ff5e2425">TRX</a>
+        </div>
+        <span class="tabular-nums text-positive shrink-0">+11.91%</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">TRON</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">5,000</span>
+        <span>@</span>
+        <span class="tabular-nums">€0.10</span>
+        <span>→</span>
+        <span class="tabular-nums">€0.11</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-muted-foreground" data-state="closed" data-slot="tooltip-trigger">€0.00</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="tabular-nums text-positive">+20.00%</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-card p-4 text-muted-foreground">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/5bd36170-1c45-5633-9d6b-1f896b4ea9cc">XRP</a>
+          <span data-slot="badge" data-variant="secondary" class="inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&amp;&gt;svg]:pointer-events-none [&amp;&gt;svg]:size-3 bg-secondary text-secondary-foreground [a&amp;]:hover:bg-secondary/90">Closed</span>
+        </div>
+        <span class="text-muted-foreground tabular-nums shrink-0">—</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">XRP</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">0</span>
+        <span>@</span>
+        <span class="tabular-nums">—</span>
+        <span>→</span>
+        <span class="tabular-nums">—</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €4.88</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="cursor-help text-muted-foreground tabular-nums" aria-label="TWRR needs at least 7 days of data within the selected timeframe." data-state="closed" data-slot="tooltip-trigger">—</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-card p-4 text-muted-foreground">
+      <div class="flex min-w-0 items-baseline justify-between gap-3 text-base font-semibold">
+        <div class="flex min-w-0 items-center gap-2">
+          <a class="min-w-0 truncate hover:underline" href="/holdings/i/359a54f0-ec9f-581f-8bf7-7f521e19e5cc">ADA</a>
+          <span data-slot="badge" data-variant="secondary" class="inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&amp;&gt;svg]:pointer-events-none [&amp;&gt;svg]:size-3 bg-secondary text-secondary-foreground [a&amp;]:hover:bg-secondary/90">Closed</span>
+        </div>
+        <span class="text-muted-foreground tabular-nums shrink-0">—</span>
+      </div>
+      <div class="mt-1 truncate text-xs text-muted-foreground">Cardano</div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-muted-foreground">
+        <span class="tabular-nums">0</span>
+        <span>@</span>
+        <span class="tabular-nums">—</span>
+        <span>→</span>
+        <span class="tabular-nums">—</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-negative" data-state="closed" data-slot="tooltip-trigger">− €337.27</span>
+      </div>
+      <div class="mt-1 text-sm">
+        <span class="text-muted-foreground">TWRR (annualized): </span>
+        <span class="cursor-help text-muted-foreground tabular-nums" aria-label="TWRR needs at least 7 days of data within the selected timeframe." data-state="closed" data-slot="tooltip-trigger">—</span>
+      </div>
+    </div>
+    <div class="rounded-lg border border-border bg-muted/40 p-4 font-semibold">
+      <div class="flex items-baseline justify-between gap-3 text-base">
+        <span>Total</span>
+        <span class="text-muted-foreground">—</span>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <span>Cost basis:</span>
+        <span class="tabular-nums">—</span>
+        <span>·</span>
+        <span>Market value:</span>
+        <span class="tabular-nums">€14,164.29</span>
+      </div>
+      <div class="mt-2 text-sm">
+        <span class="text-muted-foreground">Realized: </span>
+        <span class="tabular-nums text-positive" data-state="closed" data-slot="tooltip-trigger">+ €97.13</span>
+      </div>
+    </div>
+  </div>
+</div>

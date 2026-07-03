@@ -1,0 +1,42 @@
+---
+// Eyebrow — uppercase accent Label with an optional leading wave-tick.
+// Counts toward the 10% accent budget.
+interface Props {
+  tick?: boolean;
+  class?: string;
+}
+const { tick = true, class: extra = "" } = Astro.props;
+---
+
+<p class:list={["eyebrow", extra]}>
+  {tick && <span class="eyebrow__tick" aria-hidden="true"></span>}
+  <span class="eyebrow__text"><slot /></span>
+</p>
+
+<style>
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-sm);
+    font-size: var(--text-label);
+    font-weight: var(--weight-bold);
+    line-height: var(--leading-label);
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+  }
+  /* thin gradient wave-tick — the flow motif */
+  .eyebrow__tick {
+    width: 20px;
+    height: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--color-accent);
+    background-image: var(--brand-gradient);
+  }
+  .eyebrow__text {
+    background: var(--color-accent);
+    background-image: var(--brand-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+</style>

@@ -1,0 +1,58 @@
+[project]
+name = "flowfolio-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.136.*",
+    "uvicorn[standard]==0.29.*",
+    "sqlalchemy[asyncio]==2.0.*",
+    "aiosqlite==0.20.*",
+    "alembic==1.13.*",
+    "pydantic-settings==2.*",
+    # bcrypt is used directly (app.core.security) — the former CryptContext
+    # wrapper lib was dropped (no release since 2020). Floor at 4 for the
+    # modern hashpw/checkpw/gensalt API.
+    "bcrypt>=4",
+    "python-jose[cryptography]==3.*",
+    "httpx==0.27.*",
+    "apscheduler>=3.11,<4",
+    # FT.com tear-sheet scraper. selectolax chosen over lxml/parsel
+    # because it ships pre-built Python 3.12 wheels (zero compile), is the
+    # fastest CSS-based HTML parser available, and the FT scrape only needs a
+    # single CSS selector (`span.mod-ui-data-list__value`).
+    "selectolax>=0.3,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.*",
+    # 1.x line: 0.23 flooded every run with ~36k DeprecationWarnings from its
+    # use of asyncio.iscoroutinefunction. 1.x drops that and is pytest-8 compatible.
+    "pytest-asyncio>=1.0,<2",
+    "httpx==0.27.*",
+    "ruff==0.4.*",
+    "mypy==1.10.*",
+]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Committed golden-equivalence baselines: each EXPECTED value
+# is a single multi-KB JSON literal that cannot be wrapped without breaking the
+# byte-identity contract. E501 (line length) is intentionally exempt here.
+"tests/_golden_expected.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# pytest-asyncio 1.x emits a config warning unless the default fixture loop
+# scope is explicit. "function" preserves the 0.23 default (per-test loop).
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "live: live-network smoke tests (require PYTEST_LIVE=1 + provider env keys)",
+]

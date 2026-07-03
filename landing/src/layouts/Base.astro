@@ -1,0 +1,50 @@
+---
+// Base — HTML shell for every landing page: head (meta/viewport/title/description),
+// self-hosted font preload, global stylesheet, sticky Header, body slot, Footer.
+import "../styles/global.css";
+import interLatin from "@fontsource/inter/files/inter-latin-400-normal.woff2";
+import Header from "../components/Header.astro";
+import Footer from "../components/Footer.astro";
+import { GITHUB_URL, RESOLVED_DEMO_URL } from "../config";
+
+interface Props {
+  title?: string;
+  description?: string;
+  demoHref?: string;
+  githubHref?: string;
+}
+const {
+  title = "Flowfolio — your portfolio, not someone else's product.",
+  description = "Flowfolio is a self-hosted portfolio tracker that compares the real return of every holding you own, across any timeframe. Your financial data never leaves your server.",
+  demoHref = RESOLVED_DEMO_URL,
+  githubHref = GITHUB_URL,
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href={interLatin}
+      crossorigin
+    />
+  </head>
+  <body>
+    <Header demoHref={demoHref} githubHref={githubHref} />
+    <main>
+      <slot />
+    </main>
+    <Footer demoHref={demoHref} githubHref={githubHref} />
+  </body>
+</html>

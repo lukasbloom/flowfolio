@@ -1,0 +1,111 @@
+---
+// Footer — logo mark, one-line tagline, link columns, AGPL-3.0 note.
+interface Props {
+  githubHref?: string;
+  demoHref?: string;
+}
+const {
+  githubHref = "https://github.com/lukasbloom/flowfolio",
+  demoHref = "#",
+} = Astro.props;
+
+const year = new Date().getFullYear();
+---
+
+<footer class="footer">
+  <div class="container footer__grid">
+    <div class="footer__brand">
+      <img
+        class="footer__mark"
+        src="/logo.png"
+        alt="Flowfolio"
+        width="40"
+        height="40"
+      />
+      <p class="footer__tagline">
+        Your portfolio, not someone else&rsquo;s product.
+      </p>
+    </div>
+
+    <nav class="footer__col" aria-label="Project">
+      <p class="footer__heading">Project</p>
+      <a class="footer__link" href={githubHref} rel="noopener">GitHub</a>
+      <a class="footer__link" href={demoHref}>Demo</a>
+      <a class="footer__link" href={`${githubHref}#readme`} rel="noopener"
+        >README</a
+      >
+      <a
+        class="footer__link"
+        href={`${githubHref}/blob/main/LICENSE`}
+        rel="noopener">License</a
+      >
+    </nav>
+  </div>
+
+  <div class="container footer__legal">
+    <span>Built with Flowfolio &middot; {year}</span>
+    <span>AGPL-3.0 &mdash; free and open source, forever.</span>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    background: var(--color-ink);
+    color: var(--color-on-ink);
+    padding-block: var(--space-3xl) var(--space-xl);
+  }
+  .footer__grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3xl);
+    justify-content: space-between;
+    padding-bottom: var(--space-2xl);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .footer__brand {
+    max-width: 320px;
+  }
+  .footer__mark {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-button);
+  }
+  .footer__tagline {
+    margin-top: var(--space-md);
+    color: var(--color-muted);
+    font-size: var(--text-body-sm);
+  }
+  .footer__col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+  }
+  .footer__heading {
+    font-size: var(--text-label);
+    font-weight: var(--weight-bold);
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    color: var(--color-muted);
+    margin-bottom: var(--space-xs);
+  }
+  .footer__link {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap-min);
+    font-size: var(--text-body-sm);
+    color: var(--color-on-ink);
+    transition: color 120ms ease;
+  }
+  .footer__link:hover {
+    color: var(--color-accent);
+  }
+  .footer__legal {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm) var(--space-lg);
+    justify-content: space-between;
+    margin-top: var(--space-lg);
+    font-size: var(--text-label);
+    color: var(--color-muted);
+  }
+</style>

@@ -1,0 +1,33 @@
+# Site address env-switches the deploy mode:
+#   DOMAIN unset  -> http://localhost:8080, plain HTTP, NO cert attempt
+#   DOMAIN=host   -> Caddy runs ACME automatic HTTPS on 443 for that hostname
+# The no-DOMAIN case stays plain HTTP — no self-signed cert directive — because
+# an internal-CA cert is untrusted and breaks plain-HTTP localhost.
+#
+# ACME defaults to Let's Encrypt production. For first-boot domain testing
+# against the LE staging CA, uncomment the global block below and set ACME_CA
+# (an empty acme_ca value fails Caddyfile validation, so it can't be gated by
+# an unset env var inline — keep it commented until staging is actually needed):
+#   {
+#       acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+#   }
+
+{$DOMAIN:http://localhost:8080} {
+    # Security headers applied to every response. No full CSP yet — Next.js
+    # inline scripts make a strict CSP a tuning project of its own (deferred).
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+
+    # API routes proxied to FastAPI (loopback — all processes share the container).
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # All other routes to Next.js (loopback).
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+}

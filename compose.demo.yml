@@ -1,0 +1,95 @@
+# Demo overlay — the public, credential-free playground at http://localhost:8082.
+#
+# Usage:
+#   docker compose -f compose.yml -f compose.demo.yml up -d
+#
+# This is compose.test.yml's recipe (single shipped image, frozen clock, NullPool,
+# hermetic network, separate volume + port) PRODUCTIONIZED into a public demo:
+#   - APP_ENV=production                             (real hardening: /api/docs off,
+#                                                     secure cookies, the default-secrets
+#                                                     guard active) — NOT development like
+#                                                     the test overlay
+#   - DEMO_MODE=true                                 (demo-login, banner,
+#                                                     reset-only scheduler, boot-seed swap,
+#                                                     the fixed_now guard exemption)
+#   - FLOWFOLIO_FIXED_NOW=2026-04-30T12:00:00Z       (clock pin; the seed is
+#                                                     internally coherent only at this
+#                                                     instant; freezing it also removes
+#                                                     any need to fetch live prices/FX).
+#                                                     Allowed under production ONLY because
+#                                                     DEMO_MODE=true.
+#   - FLOWFOLIO_NULL_POOL=true                        (fresh SQLite connection per request
+#                                                     so the boot/reset seed swap's new
+#                                                     inode is visible immediately)
+#   - FLOWFOLIO_NETWORK_HERMETIC=true                 (hard outbound backstop — even an
+#                                                     on-demand "refresh price" can't reach
+#                                                     the wire)
+#   - FLOWFOLIO_DEMO_RESET_HOURS=6                     (reset cadence; the reset cron
+#                                                     IS the only scheduler job in demo)
+#   - APP_PASSWORD=demo-not-a-real-secret             (throwaway pre-seed so setup_complete
+#                                                     stays true and the wizard never shows.
+#                                                     Visitors NEVER see or need it;
+#                                                     they enter via the auto-session.
+#                                                     It is NOT "changeme", so the
+#                                                     default-secrets guard is satisfied.)
+#   - db_data_demo (separate named volume — the prod db_data and backups are untouched)
+#   - host port 8082 (the dev stack on 8080 and the test stack on 8081 stay free)
+#
+# DELIBERATELY NOT SET:
+#   - SECRET_KEY                                      ensure_secret_key auto-generates and
+#                                                     persists a strong per-instance key on
+#                                                     the volume. Pinning a static
+#                                                     default would defeat that and trip the
+#                                                     default-secrets guard.
+#   - FLOWFOLIO_SCHEDULER_ENABLED=false               the reset cron MUST run, so the
+#                                                     scheduler stays enabled (unlike the
+#                                                     test overlay, which suppresses it).
+#
+# INHERITED `updater` SIDECAR: compose.yml ships a docker-socket-holding updater. The
+# public demo deployment decides whether to run it. The 403 on
+# POST /api/update/apply means the app never writes /update/request.json, so the updater
+# idles regardless — do NOT rely on this overlay to disable it.
+
+services:
+  flowfolio:
+    # Inherit the single shipped image from compose.yml. `!override` REPLACES the
+    # inherited (production) volumes list with just db_data_demo — the public demo
+    # never touches the prod db_data or backups (CLAUDE.md gotcha: !override, not
+    # !reset, to swap a list for a new one).
+    volumes: !override
+      - db_data_demo:/data
+    # Defensive (CLAUDE.md gotcha): compose.yml has no env_file today, but
+    # `!reset null` guarantees a future `env_file: ./.env` can never UNION real
+    # secrets into the PUBLIC demo's environment.
+    env_file: !reset null
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////data/flowfolio.db
+      - DEMO_MODE=true
+      - APP_ENV=production
+      - FLOWFOLIO_FIXED_NOW=2026-04-30T12:00:00Z
+      - FLOWFOLIO_NULL_POOL=true
+      - FLOWFOLIO_NETWORK_HERMETIC=true
+      - FLOWFOLIO_DEMO_RESET_HOURS=6
+      # Throwaway pre-seed. Never shown to visitors; NOT "changeme".
+      - APP_PASSWORD=demo-not-a-real-secret
+      - TZ=UTC
+      # SECRET-LEAK BACKSTOP: compose.yml's environment block
+      # interpolates the operator's secrets via ${VAR:-} from the auto-loaded
+      # top-level .env (a path `env_file: !reset null` does NOT close — that only
+      # clears service `env_file:` directives, not ${VAR} interpolation). Because
+      # compose MERGES environment maps across overlays, those inherited keys would
+      # otherwise carry the operator's real SECRET_KEY / backup secrets into the
+      # PUBLIC demo. Blank them here so no real secret ever reaches the demo
+      # container. SECRET_KEY='' is NOT a pinned static key — ensure_secret_key
+      # auto-generates a per-instance key from empty. The demo runs no
+      # backup job (reset-only scheduler), so the backup secrets are simply unset.
+      - SECRET_KEY=
+      - BACKUP_ENCRYPTION_KEY=
+      - BACKUP_DEST=
+    # The single image serves HTTP on 8080 with no DOMAIN; publish it on host 8082
+    # so it does not collide with the dev (8080) or test (8081) stacks.
+    ports: !override
+      - "8082:8080"
+
+volumes:
+  db_data_demo:

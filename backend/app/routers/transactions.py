@@ -1,0 +1,382 @@
+from decimal import Decimal
+from typing import Optional
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import delete as sql_delete
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.core import clock
+from app.core.database import get_db
+from app.core.enums import ACQUISITION_TXN_TYPES, DISPOSAL_TXN_TYPES
+from app.models.account import Account
+from app.models.instrument import Instrument
+from app.models.lot_alloc import LotAlloc
+from app.models.transaction import Transaction
+from app.models.txn_audit import TxnAudit
+from app.schemas.audit import AuditEvent
+from app.schemas.transaction import (
+    TransactionCreate,
+    TransactionResponse,
+    TransactionUpdate,
+)
+from app.services.audit import AUDITED_FIELDS, _stringify, write_audit_event
+from app.services.cost_basis import compute_cost_basis as _compute_cost_basis
+from app.services.fifo import match_lots_for_sell
+from app.services.fx import get_or_fetch_fx_rate
+
+router = APIRouter(prefix="/api/transactions", tags=["transactions"])
+
+
+def _compute_diff_from_snapshots(
+    before: dict, after_payload: dict
+) -> dict:
+    """Compute field-level diff from two plain dicts.
+
+    Only fields present in both AUDITED_FIELDS and after_payload are compared.
+    Used in the PUT handler where txn has already been mutated before diff computation.
+    """
+    diff: dict = {}
+    for field in AUDITED_FIELDS:
+        if field not in after_payload:
+            continue
+        before_val = before.get(field)
+        after_val = after_payload[field]
+        if _stringify(before_val) != _stringify(after_val):
+            diff[field] = {"old": _stringify(before_val), "new": _stringify(after_val)}
+    return diff
+
+
+async def _delete_lot_allocs_for_sell(session: AsyncSession, sell_txn_id: str) -> None:
+    """Delete all lot_alloc rows for a sell/spend transaction (cascade re-open of buy lots)."""
+    await session.execute(
+        sql_delete(LotAlloc).where(LotAlloc.sell_txn_id == sell_txn_id)
+    )
+
+
+@router.post("", response_model=TransactionResponse, status_code=201)
+async def create_transaction(body: TransactionCreate, db: AsyncSession = Depends(get_db)):
+    # Sign convention: buy/yield/adjustment are positive; sell/spend are negative (consume lots)
+    # Note: sell is rejected at Pydantic layer so it never reaches here in practice.
+    signed_qty = -body.quantity if body.txn_type in DISPOSAL_TXN_TYPES else body.quantity
+
+    txn = Transaction(
+        account_id=body.account_id,
+        instrument_id=body.instrument_id,
+        txn_type=body.txn_type,
+        date=body.date,
+        quantity=signed_qty,
+        unit_price=body.unit_price,
+        price_currency=body.price_currency,
+        fx_rate_to_eur=body.fx_rate_to_eur,
+        fee_eur=body.fee_eur,
+        notes=body.notes,
+        source=body.source or "manual",  # pass-through from TransactionCreate; default fallback
+        reconciliation_id=body.reconciliation_id,
+    )
+
+    # FX auto-lock:
+    # fx_rate_to_eur stores the EUR-base rate (USD per 1 EUR), e.g. 1.0512.
+    # cost_basis_eur = price_USD / fx_rate_to_eur (NOT × fx_rate_to_eur).
+    # See backend/app/models/transaction.py.
+    if body.price_currency == "USD" and body.fx_rate_to_eur is None:
+        # No explicit rate: fetch from Frankfurter and lock immutably on this row
+        async with httpx.AsyncClient() as fx_client:
+            try:
+                fx_row = await get_or_fetch_fx_rate(
+                    db, fx_client, body.date, base="EUR", quote="USD"
+                )
+            except ValueError as exc:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"fx upstream error: {exc} — retry or supply "
+                        "fx_rate_to_eur explicitly"
+                    ),
+                )
+        txn.fx_rate_to_eur = fx_row.rate
+    elif body.price_currency == "USD" and body.fx_rate_to_eur is not None:
+        # User supplied explicit rate (broker markup, also EUR-base, USD per
+        # 1 EUR). Warm the fx_rate cache for history but do NOT
+        # overwrite the txn's locked rate. Cache warming is best-effort.
+        async with httpx.AsyncClient() as fx_client:
+            try:
+                await get_or_fetch_fx_rate(
+                    db, fx_client, body.date, base="EUR", quote="USD"
+                )
+            except ValueError:
+                pass
+    elif body.price_currency == "EUR":
+        # Identity rate; never call Frankfurter for EUR↔EUR
+        txn.fx_rate_to_eur = Decimal("1")
+
+    txn.cost_basis_eur = _compute_cost_basis(txn)
+    db.add(txn)
+    await db.flush()  # get txn.id before FIFO runs
+
+    # Spend transactions consume lots same as a sell (already signed negative above)
+    if body.txn_type == "spend":
+        try:
+            await match_lots_for_sell(db, txn)
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    await db.commit()
+    # Reload with lot_allocs eagerly
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.id == txn.id)
+        .options(selectinload(Transaction.lot_allocs))
+    )
+    txn_out = result.scalar_one()
+    resp = TransactionResponse.model_validate(txn_out)
+    resp.lot_alloc_count = len(txn_out.lot_allocs)
+    return resp
+
+
+@router.get("", response_model=list[TransactionResponse])
+async def list_transactions(
+    account_id: Optional[str] = None,
+    instrument_id: Optional[str] = None,
+    txn_type: Optional[str] = None,
+    include_deleted: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = select(Transaction).options(selectinload(Transaction.lot_allocs))
+    if not include_deleted:
+        stmt = stmt.where(Transaction.deleted_at.is_(None))
+    if account_id:
+        stmt = stmt.where(Transaction.account_id == account_id)
+    if instrument_id:
+        stmt = stmt.where(Transaction.instrument_id == instrument_id)
+    if txn_type:
+        stmt = stmt.where(Transaction.txn_type == txn_type)
+    stmt = stmt.order_by(Transaction.date.desc(), Transaction.created_at.desc())
+    result = await db.execute(stmt)
+    txns = result.scalars().all()
+
+    # Compute lot_alloc_count per transaction
+    txn_ids = [t.id for t in txns]
+    sell_counts: dict[str, int] = {}
+    buy_counts: dict[str, int] = {}
+    if txn_ids:
+        # Count lot_alloc rows by sell_txn_id
+        sell_stmt = (
+            select(LotAlloc.sell_txn_id, func.count(LotAlloc.id).label("cnt"))
+            .where(LotAlloc.sell_txn_id.in_(txn_ids))
+            .group_by(LotAlloc.sell_txn_id)
+        )
+        sell_result = await db.execute(sell_stmt)
+        sell_counts = {row.sell_txn_id: row.cnt for row in sell_result}
+
+        # Count lot_alloc rows by buy_txn_id
+        buy_stmt = (
+            select(LotAlloc.buy_txn_id, func.count(LotAlloc.id).label("cnt"))
+            .where(LotAlloc.buy_txn_id.in_(txn_ids))
+            .group_by(LotAlloc.buy_txn_id)
+        )
+        buy_result = await db.execute(buy_stmt)
+        buy_counts = {row.buy_txn_id: row.cnt for row in buy_result}
+
+    # Bulk-fetch account names and instrument symbols for the returned txns
+    # so the ledger UI can render them without N+1 lookups.
+    account_ids = {t.account_id for t in txns}
+    instrument_ids = {t.instrument_id for t in txns}
+    account_names: dict[str, str] = {}
+    instrument_symbols: dict[str, str] = {}
+    # Hydrate per-instrument context (type +
+    # display_decimals override) so the txn-list table can format
+    # quantity at the right precision without a second fetch.
+    instrument_types: dict[str, str] = {}
+    instrument_display_decimals: dict[str, int | None] = {}
+    if account_ids:
+        rows = await db.execute(
+            select(Account.id, Account.name).where(Account.id.in_(account_ids))
+        )
+        account_names = {r.id: r.name for r in rows}
+    if instrument_ids:
+        rows = await db.execute(
+            select(
+                Instrument.id,
+                Instrument.symbol,
+                Instrument.instrument_type,
+                Instrument.display_decimals,
+            ).where(Instrument.id.in_(instrument_ids))
+        )
+        for r in rows:
+            instrument_symbols[r.id] = r.symbol
+            instrument_types[r.id] = r.instrument_type
+            instrument_display_decimals[r.id] = r.display_decimals
+
+    responses = []
+    for txn in txns:
+        resp = TransactionResponse.model_validate(txn)
+        resp.lot_alloc_count = sell_counts.get(txn.id, 0) + buy_counts.get(txn.id, 0)
+        resp.account_name = account_names.get(txn.account_id)
+        resp.instrument_symbol = instrument_symbols.get(txn.instrument_id)
+        resp.instrument_type = instrument_types.get(txn.instrument_id)
+        resp.display_decimals = instrument_display_decimals.get(txn.instrument_id)
+        responses.append(resp)
+    return responses
+
+
+@router.get("/{txn_id}/audit", response_model=list[AuditEvent])
+async def get_audit_history(txn_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(TxnAudit)
+        .where(TxnAudit.transaction_id == txn_id)
+        .order_by(TxnAudit.changed_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/{txn_id}", response_model=TransactionResponse)
+async def get_transaction(txn_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.id == txn_id)
+        .where(Transaction.deleted_at.is_(None))
+        .options(selectinload(Transaction.lot_allocs))
+    )
+    txn = result.scalar_one_or_none()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    resp = TransactionResponse.model_validate(txn)
+    resp.lot_alloc_count = len(txn.lot_allocs)
+    return resp
+
+
+@router.put("/{txn_id}", response_model=TransactionResponse)
+async def update_transaction(
+    txn_id: str, body: TransactionUpdate, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.id == txn_id)
+        .options(selectinload(Transaction.lot_allocs))
+    )
+    txn = result.scalar_one_or_none()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    # Cannot edit a tombstoned row
+    if txn.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    was_sell = txn.txn_type in DISPOSAL_TXN_TYPES
+    update_data = body.model_dump(exclude_unset=True)
+
+    # Prevent explicitly clearing the price fields on a buy/spend.
+    # We only reject the explicit-null case (`{"unit_price": null}`), leaving
+    # the field absent from the PUT body is fine, even on legacy rows that
+    # already have nulls (you should be able to edit notes on a broken row
+    # without being forced to fix every column at once).
+    if txn.txn_type in ACQUISITION_TXN_TYPES:
+        cleared = [
+            field
+            for field in ("unit_price", "price_currency")
+            if field in update_data and update_data[field] is None
+        ]
+        if cleared:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Cannot clear {', '.join(cleared)} on a {txn.txn_type} — "
+                    "set a value or delete the transaction."
+                ),
+            )
+
+    # Capture before-snapshot for audit diff (BEFORE mutating txn)
+    before_snapshot: dict = {field: getattr(txn, field, None) for field in AUDITED_FIELDS}
+
+    # Apply updates
+    for field, value in update_data.items():
+        if field == "quantity" and value is not None:
+            # Maintain sign convention for sell/spend
+            signed = value if txn.txn_type not in DISPOSAL_TXN_TYPES else -value
+            setattr(txn, field, signed)
+        else:
+            setattr(txn, field, value)
+
+    txn.cost_basis_eur = _compute_cost_basis(txn)
+
+    # Compute diff using before snapshot vs the incoming update_data
+    # compare_payload maps AUDITED_FIELDS present in update_data against before values
+    diff = _compute_diff_from_snapshots(before_snapshot, update_data)
+    if diff:
+        await write_audit_event(db, txn.id, "edit", diff)
+
+    # If this is (or was) a sell/spend, recompute FIFO
+    is_sell_now = txn.txn_type in DISPOSAL_TXN_TYPES
+    if was_sell or is_sell_now:
+        await _delete_lot_allocs_for_sell(db, txn.id)
+        await db.flush()
+        if is_sell_now:
+            try:
+                await match_lots_for_sell(db, txn)
+            except ValueError as exc:
+                await db.rollback()
+                raise HTTPException(status_code=422, detail=str(exc))
+
+    await db.commit()
+    result = await db.execute(
+        select(Transaction)
+        .where(Transaction.id == txn.id)
+        .options(selectinload(Transaction.lot_allocs))
+    )
+    txn_out = result.scalar_one()
+    resp = TransactionResponse.model_validate(txn_out)
+    resp.lot_alloc_count = len(txn_out.lot_allocs)
+    return resp
+
+
+@router.delete("/{txn_id}", status_code=204)
+async def delete_transaction(txn_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Transaction).where(Transaction.id == txn_id))
+    txn = result.scalar_one_or_none()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    # Idempotent failure, second delete is invalid
+    if txn.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    # Capture trade_pair_id before mutating
+    pair_id = txn.trade_pair_id
+
+    # Soft delete, set deleted_at
+    txn.deleted_at = clock.now()
+
+    # Write audit row for the delete
+    await write_audit_event(
+        db, txn.id, "delete", {"deleted_at": {"old": None, "new": "now"}}
+    )
+
+    # If this was a sell or spend, release its lot_alloc rows
+    if txn.txn_type in DISPOSAL_TXN_TYPES:
+        await _delete_lot_allocs_for_sell(db, txn.id)
+
+    # Linked-pair cascade, soft-delete the paired transaction
+    if pair_id is not None:
+        pair_result = await db.execute(
+            select(Transaction).where(
+                Transaction.trade_pair_id == pair_id,
+                Transaction.id != txn.id,
+                Transaction.deleted_at.is_(None),
+            )
+        )
+        paired = pair_result.scalar_one_or_none()
+        if paired is not None:
+            paired.deleted_at = clock.now()
+            await write_audit_event(
+                db, paired.id, "delete", {"deleted_at": {"old": None, "new": "now"}}
+            )
+            # Also release lot_alloc rows for the paired txn if it was a sell/spend
+            if paired.txn_type in DISPOSAL_TXN_TYPES:
+                await _delete_lot_allocs_for_sell(db, paired.id)
+
+    await db.commit()

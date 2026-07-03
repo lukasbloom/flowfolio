@@ -1,0 +1,8 @@
+# Cloudflare Pages serves this file from the build output (dist/_headers) and
+# applies these response headers to matching paths. Mirrors the three security
+# headers the app's Caddyfile sets, scoped to the whole static landing. No CSP
+# yet — the landing has no inline-script tuning to gate.
+/*
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin

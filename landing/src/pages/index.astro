@@ -1,0 +1,249 @@
+---
+// The shipping landing page. Eight
+// sections in top-to-bottom order. Header + Footer come from Base; the
+// slot below carries Hero -> Trust strip -> Feature highlights -> How it works
+// -> Install -> Final CTA band. All CTA hrefs read from config.ts (no hardcoded
+// guessed URL).
+import Base from "../layouts/Base.astro";
+import Eyebrow from "../components/Eyebrow.astro";
+import Button from "../components/Button.astro";
+import InstallBlock from "../components/InstallBlock.astro";
+import Hero from "../components/Hero.astro";
+import TrustCard from "../components/TrustCard.astro";
+import FeatureBlock from "../components/FeatureBlock.astro";
+import Step from "../components/Step.astro";
+import { GITHUB_URL, RESOLVED_DEMO_URL } from "../config";
+
+// Screenshots through the astro:assets pipeline (responsive AVIF/WebP).
+import compareShot from "../assets/screenshots/compare-performance.desktop.png";
+import networthShot from "../assets/screenshots/track-networth.desktop.png";
+import allocationShot from "../assets/screenshots/allocation-concentration.desktop.png";
+
+// Trust-strip icon glyphs (zero-JS inline SVG).
+import serverIcon from "lucide-static/icons/server.svg?raw";
+import gitForkIcon from "lucide-static/icons/git-fork.svg?raw";
+import userIcon from "lucide-static/icons/user.svg?raw";
+---
+
+<Base>
+  <!-- 2. Hero -->
+  <Hero image={compareShot} demoHref={RESOLVED_DEMO_URL} githubHref={GITHUB_URL} />
+
+  <!-- 3. Trust strip -->
+  <section class="section section--alt">
+    <div class="container">
+      <div class="trust-grid">
+        <TrustCard icon={serverIcon} title="Self-hosted by design">
+          It runs on your machine. Your transactions, balances, and returns never
+          touch our servers, because there are none.
+        </TrustCard>
+        <TrustCard icon={gitForkIcon} title="Free and open source">
+          AGPL-3.0, forever. Read the code, run it yourself, change whatever you
+          like.
+        </TrustCard>
+        <TrustCard icon={userIcon} title="Built for one">
+          No accounts, no sign-up, no upsell. Just your portfolio.
+        </TrustCard>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Feature highlights, each highlight is its own section -->
+  <section class="section feature-section">
+    <div class="container">
+      <FeatureBlock
+        image={compareShot}
+        alt="Screenshot of the Flowfolio compare view: holdings ranked by total return and time-weighted return"
+        title="See what's actually working"
+        ratio="1232 / 900"
+        widths={[480, 800, 1100]}
+      >
+        Every holding ranked by total return and time-weighted return, over any
+        window. No more guessing which bet paid off.
+      </FeatureBlock>
+    </div>
+  </section>
+
+  <section class="section feature-section">
+    <div class="container">
+      <FeatureBlock
+        image={networthShot}
+        alt="Screenshot of the Flowfolio net-worth chart: contributions versus market value over time"
+        title="Watch your net worth take shape"
+        ratio="1232 / 420"
+        widths={[480, 800, 1100]}
+        reverse
+      >
+        The full story of what you put in versus what the market gave back,
+        charted day by day &mdash; not just today&rsquo;s snapshot.
+      </FeatureBlock>
+    </div>
+  </section>
+
+  <section class="section feature-section">
+    <div class="container">
+      <FeatureBlock
+        image={allocationShot}
+        alt="Screenshot of the Flowfolio allocation view: holdings split by type, account, and risk"
+        title="Know where your money sits"
+        ratio="604 / 320"
+        widths={[358, 604]}
+      >
+        Allocation by type, account, and risk at a glance, with a quiet nudge
+        when one position starts to take over.
+      </FeatureBlock>
+    </div>
+  </section>
+
+  <!-- 5. How it works -->
+  <section class="section section--alt">
+    <div class="container howto">
+      <Eyebrow>How it works</Eyebrow>
+      <ol class="howto__steps">
+        <Step number={1} title="Spin it up">
+          One command on your own server. HTTPS and daily backups included.
+        </Step>
+        <Step number={2} title="Add your transactions">
+          Record buys, sells, and yield across every account you hold, in EUR or
+          USD.
+        </Step>
+        <Step number={3} title="See what's working">
+          Open the dashboard and compare the real return of everything you own.
+        </Step>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 6. Install / get started -->
+  <section class="section">
+    <div class="container install-section">
+      <h2 class="install-section__title">Get started in one command</h2>
+      <p class="install-section__sub">
+        On any machine with Docker. Full configuration lives in the
+        <a class="install-section__link" href={`${GITHUB_URL}#readme`} rel="noopener"
+          >README</a
+        >.
+      </p>
+      <div class="install-section__block">
+        <InstallBlock />
+      </div>
+    </div>
+  </section>
+
+  <!-- 7. Final CTA band -->
+  <section class="cta-band">
+    <div class="container cta-band__inner">
+      <p class="cta-band__line">
+        Your portfolio deserves an honest scorecard. Self-hosted, free, and open.
+      </p>
+      <div class="cta-band__cta">
+        <Button variant="primary" href={RESOLVED_DEMO_URL}>Try the live demo</Button>
+        <Button variant="secondary" href={GITHUB_URL} rel="noopener" class="cta-band__ghost">
+          View on GitHub
+        </Button>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .section--alt {
+    background: var(--color-bg-alt);
+  }
+
+  /* Trust strip — 1 col mobile, 2 col tablet, 3 col desktop. */
+  .trust-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-lg);
+  }
+  @media (min-width: 640px) {
+    .trust-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+  @media (min-width: 1024px) {
+    .trust-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  /* Feature highlights — each is its own section; halve the section padding so
+     stacked features keep the ~96px inter-block rhythm without doubling up. */
+  .feature-section {
+    padding-block: var(--space-2xl);
+  }
+  @media (min-width: 1024px) {
+    .feature-section {
+      padding-block: var(--space-3xl);
+    }
+  }
+
+  /* How it works. */
+  .howto__steps {
+    list-style: none;
+    margin: var(--space-2xl) 0 0;
+    padding: 0;
+    max-width: 640px;
+  }
+
+  /* Install section. */
+  .install-section {
+    max-width: 720px;
+  }
+  .install-section__title {
+    font-size: var(--text-heading);
+    line-height: var(--leading-heading);
+  }
+  .install-section__sub {
+    margin-top: var(--space-md);
+    font-size: var(--text-body);
+    color: var(--color-muted);
+  }
+  .install-section__link {
+    color: var(--color-accent);
+    font-weight: var(--weight-bold);
+  }
+  .install-section__link:hover {
+    text-decoration: underline;
+  }
+  .install-section__block {
+    margin-top: var(--space-xl);
+  }
+
+  /* Final CTA band — dark slate. */
+  .cta-band {
+    background: var(--color-ink);
+    color: var(--color-on-ink);
+    padding-block: var(--section-pad-y);
+  }
+  .cta-band__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-xl);
+  }
+  .cta-band__line {
+    max-width: 28ch;
+    font-size: var(--text-heading);
+    line-height: var(--leading-heading);
+    font-weight: var(--weight-bold);
+  }
+  .cta-band__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-md);
+    justify-content: center;
+  }
+  /* On the dark band the secondary/ghost button needs a light outline.
+     :global — the class lands on the child Button's element, outside this scope. */
+  :global(.cta-band__ghost) {
+    color: var(--color-on-ink);
+    border-color: var(--color-on-ink);
+  }
+  :global(.cta-band__ghost:hover) {
+    background: var(--color-on-ink);
+    color: var(--color-ink);
+  }
+</style>

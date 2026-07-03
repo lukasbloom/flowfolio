@@ -1,0 +1,75 @@
+# Multi-service base (the former top-level compose.yml): api + web + caddy + backup.
+# This is the BASE the dev/test overlays target now that the top-level compose.yml
+# is the single-image dist artifact. Invoke as:
+#   docker compose -f compose.multi.yml -f compose.dev.yml up
+#   docker compose -f compose.multi.yml -f compose.test.yml up
+services:
+  api:
+    build: ./backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      - db_data:/data
+      - ./.env:/app/.env:ro
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////data/flowfolio.db
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - LOG_LEVEL=WARNING
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+
+  backup:
+    image: alpine:3.19
+    restart: unless-stopped
+    volumes:
+      - db_data:/data:ro                          # read-only access to the SQLite volume
+      - ./scripts:/scripts:ro                     # backup.sh and restore.sh
+      - rclone_config:/root/.config/rclone        # persists rclone remote credentials
+    environment:
+      - DB_PATH=/data/flowfolio.db
+      - BACKUP_DEST=${BACKUP_DEST:-}
+      - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
+      - BACKUP_RETAIN_DAYS=${BACKUP_RETAIN_DAYS:-30}
+    # Install tools at startup and run cron at 02:00 UTC daily.
+    # NOTE: after first deployment, run `docker compose exec backup rclone config`
+    # once on the host to configure the off-host remote (e.g. b2/s3). The
+    # rclone_config named volume persists those credentials across restarts.
+    entrypoint: >
+      sh -c "apk add --no-cache sqlite age rclone util-linux-misc &&
+             echo '0 2 * * * /scripts/backup.sh >> /var/log/backup.log 2>&1' | crontab - &&
+             crond -f -l 6"
+    depends_on:
+      - api
+
+volumes:
+  db_data:
+  caddy_data:
+  caddy_config:
+  rclone_config:

@@ -1,0 +1,136 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-background: oklch(0.985 0 0);
+  --color-foreground: oklch(0.205 0 0);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.205 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.205 0 0);
+  --color-primary: oklch(0.205 0 0);
+  --color-primary-foreground: oklch(0.985 0 0);
+  --color-secondary: oklch(0.97 0 0);
+  --color-secondary-foreground: oklch(0.205 0 0);
+  --color-muted: oklch(0.97 0 0);
+  --color-muted-foreground: oklch(0.556 0 0);
+  --color-accent: oklch(0.97 0 0);
+  --color-accent-foreground: oklch(0.205 0 0);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-warning: oklch(0.769 0.188 70.08);
+  --color-positive: oklch(0.598 0.151 152.0);
+  --color-negative: oklch(0.577 0.245 27.325);
+  --color-border: oklch(0.922 0 0);
+  --color-input: oklch(0.922 0 0);
+  --color-ring: oklch(0.708 0 0);
+
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-heading: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  /* Aliases so shadcn primitives that read `var(--background)` still work */
+  --background: var(--color-background);
+  --foreground: var(--color-foreground);
+  --card: var(--color-card);
+  --card-foreground: var(--color-card-foreground);
+  --popover: var(--color-popover);
+  --popover-foreground: var(--color-popover-foreground);
+  --primary: var(--color-primary);
+  --primary-foreground: var(--color-primary-foreground);
+  --secondary: var(--color-secondary);
+  --secondary-foreground: var(--color-secondary-foreground);
+  --muted: var(--color-muted);
+  --muted-foreground: var(--color-muted-foreground);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-foreground);
+  --destructive: var(--color-destructive);
+  --positive: var(--color-positive);
+  --negative: var(--color-negative);
+  --border: var(--color-border);
+  --input: var(--color-input);
+  --ring: var(--color-ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+  html {
+    font-family: var(--font-sans);
+    /* Always render a vertical scrollbar so the gutter is reserved by a real
+     * scrollbar (not just visual space). Prevents conditional-scrollbar
+     * layout shift between short/tall pages. */
+    overflow-y: scroll;
+  }
+
+  /* Permanent fix for Radix horizontal-shift on modal/dropdown open.
+   *
+   * Radix's react-remove-scroll-bar (used by every Dialog / Sheet /
+   * DropdownMenu with `modal={true}`) assumes the scrollbar lives on
+   * <body>. When a modal opens it adds `data-scroll-locked` to body AND
+   * injects `margin-right: <scrollbar-width>` to "compensate" for the
+   * scrollbar it thinks it just removed. Our scrollbar is on <html>
+   * (via `overflow-y: scroll` above) — Radix doesn't know that, and the
+   * injected margin-right is pure horizontal shift (~15px on
+   * Windows/Linux non-overlay scrollbars; 0px on macOS overlay mode —
+   * which is why this bug is intermittent on the same machine).
+   *
+   * Empirically measured 2026-06-04: body width drops from 1749 → 1734
+   * the instant `data-scroll-locked` flips on; with the rule below,
+   * width stays at 1749 across Dialog, Sheet, and DropdownMenu. Radix's
+   * actual scroll-prevention (overflow:hidden on its own wrapper +
+   * wheel-event blocking) is untouched — only the visual compensation
+   * is neutralized.
+   *
+   * Coupled to Radix's `data-scroll-locked` attribute name, which has
+   * been stable across @radix-ui/react-* v1.x. If a future Radix major
+   * renames it the rule silently no-ops and the shift returns. */
+  body[data-scroll-locked] {
+    margin-right: 0 !important;
+    padding-right: 0 !important;
+  }
+}
+
+/* APY config row anchor pulse.
+ * Triggered by ApyConfigTab setting `data-pulse="true"` on a TableRow when
+ * the user navigates from the EditTxnDialog auto-accrual ActionBanner with
+ * `?account=<id>`. The keyframe consumes the same --color-muted token as
+ * shadcn hover surfaces — feels familiar, not novel.
+ * Reduced-motion wrap for accessibility. */
+@layer utilities {
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes apy-row-pulse {
+      0%, 100% { background-color: transparent; }
+      20%, 60% { background-color: var(--color-muted); }
+    }
+
+    [data-pulse="true"] {
+      animation: apy-row-pulse 1.5s ease-in-out 1;
+    }
+  }
+}
+
+/* iOS safe-area utility classes.
+ * Consumed by BottomTabBar (.pb-safe) and AddTxnFab (.bottom-safe-offset-tab).
+ * Plain CSS under @layer utilities; Tailwind 4 allows multiple
+ * @layer utilities blocks to coexist. env(safe-area-inset-*) requires
+ * viewport-fit=cover on the root <meta> tag to resolve non-zero on iOS Safari
+ * — see frontend/app/layout.tsx. */
+@layer utilities {
+  .pb-safe   { padding-bottom: max(env(safe-area-inset-bottom), 0px); }
+  .pt-safe   { padding-top:    max(env(safe-area-inset-top),    0px); }
+  .pl-safe   { padding-left:   max(env(safe-area-inset-left),   0px); }
+  .pr-safe   { padding-right:  max(env(safe-area-inset-right),  0px); }
+  .bottom-safe-offset-tab { bottom: calc(env(safe-area-inset-bottom, 0px) + 4rem); }
+}

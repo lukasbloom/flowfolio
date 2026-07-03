@@ -1,0 +1,81 @@
+/* Flowfolio landing design tokens. Brand identity for the
+   standalone Astro site; intentionally decoupled from the app's shadcn theme. */
+
+:root {
+  /* --- Brand gradient + accent (10%) --- */
+  --brand-gradient: linear-gradient(100deg, #F7A823 0%, #F26419 100%);
+  --color-accent: #F26419; /* solid fallback for the gradient */
+  --color-accent-amber: #F7A823;
+
+  /* --- Color roles (60 / 30 / 10) --- */
+  --color-bg: #FFFFFF; /* dominant page surface */
+  --color-bg-alt: #FAF8F5; /* warm off-white alternating sections */
+  --color-ink: #0F172A; /* secondary slate — text + dark bands */
+  --color-muted: #64748B; /* slate-500 sub-labels / captions */
+  --color-border: #E7E5E1; /* warm hairline */
+  --color-border-ink: rgba(15, 23, 42, 0.08); /* hairline on light */
+  --color-on-ink: #FFFFFF; /* text on slate / gradient */
+
+  /* --- Typography — Inter 400/700 only --- */
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --weight-regular: 400;
+  --weight-bold: 700;
+
+  /* Fluid role sizes */
+  --text-display: clamp(40px, 6vw, 60px);
+  --text-heading: clamp(28px, 4vw, 36px);
+  --text-body: 18px;
+  --text-body-sm: 16px;
+  --text-label: 13px;
+
+  --leading-display: 1.1;
+  --leading-heading: 1.2;
+  --leading-body: 1.6;
+  --leading-label: 1.3;
+
+  --tracking-tight: -0.02em; /* display / heading */
+  --tracking-label: 0.08em; /* uppercase labels */
+
+  /* --- Spacing scale (4px grid) --- */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  --space-4xl: 96px;
+  --space-5xl: 128px;
+
+  /* Section vertical rhythm — desktop default, compresses on mobile below */
+  --section-pad-y: var(--space-4xl);
+  --gutter: 48px;
+  --max-content: 1120px;
+
+  /* Minimum tap target (mobile usability) */
+  --tap-min: 44px;
+
+  /* --- Radii --- */
+  --radius-card: 12px;
+  --radius-button: 8px;
+  --radius-pill: 9999px;
+
+  /* --- Elevation — one soft card shadow, no heavy drops --- */
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.06),
+    0 8px 24px rgba(15, 23, 42, 0.05);
+}
+
+/* Tablet (640–1024px): 80px section padding. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  :root {
+    --section-pad-y: 80px;
+  }
+}
+
+/* Mobile: compress section padding + tighten the gutter. */
+@media (max-width: 767px) {
+  :root {
+    --section-pad-y: var(--space-3xl); /* 64px */
+    --gutter: 24px;
+  }
+}

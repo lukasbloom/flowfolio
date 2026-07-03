@@ -1,0 +1,69 @@
+---
+// Step — accent number + title + one line, on a slate rail (how-it-works).
+// The number carries the accent.
+interface Props {
+  number: number;
+  title: string;
+}
+const { number, title } = Astro.props;
+---
+
+<li class="step">
+  <span class="step__num" aria-hidden="true">{number}</span>
+  <div class="step__body">
+    <h3 class="step__title">{title}</h3>
+    <p class="step__line"><slot /></p>
+  </div>
+</li>
+
+<style>
+  .step {
+    position: relative;
+    display: flex;
+    gap: var(--space-lg);
+    padding-bottom: var(--space-2xl);
+  }
+  /* vertical slate rail connecting the steps */
+  .step::before {
+    content: "";
+    position: absolute;
+    left: 19px;
+    top: 44px;
+    bottom: 0;
+    width: 2px;
+    background: var(--color-border);
+  }
+  .step:last-child {
+    padding-bottom: 0;
+  }
+  .step:last-child::before {
+    display: none;
+  }
+  .step__num {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-pill);
+    border: 2px solid var(--color-accent);
+    background: var(--color-bg);
+    color: var(--color-accent);
+    font-size: var(--text-body);
+    font-weight: var(--weight-bold);
+    font-variant-numeric: tabular-nums;
+  }
+  .step__title {
+    font-size: var(--text-body);
+    font-weight: var(--weight-bold);
+    line-height: 40px;
+  }
+  .step__line {
+    margin-top: var(--space-xs);
+    max-width: 52ch;
+    font-size: var(--text-body-sm);
+    line-height: var(--leading-body);
+    color: var(--color-muted);
+  }
+</style>

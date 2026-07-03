@@ -1,0 +1,3 @@
+#!/bin/sh
+# Next.js standalone server; PORT=3000 HOSTNAME=127.0.0.1 come from the image ENV.
+exec node /app/web/server.js

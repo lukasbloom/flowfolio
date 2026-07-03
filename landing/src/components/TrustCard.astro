@@ -1,0 +1,42 @@
+---
+// TrustCard — icon + title + one line. Flat card on the off-white trust strip
+// (echoes platit's privacy/trust bridge in Flowfolio terms). Icon glyph
+// carries the accent.
+interface Props {
+  icon: string; // raw lucide SVG string (set:html)
+  title: string;
+}
+const { icon, title } = Astro.props;
+---
+
+<article class="trust">
+  <span class="trust__icon" aria-hidden="true" set:html={icon} />
+  <h3 class="trust__title">{title}</h3>
+  <p class="trust__body"><slot /></p>
+</article>
+
+<style>
+  .trust {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding: var(--space-lg);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+  }
+  .trust__icon :global(svg) {
+    width: 28px;
+    height: 28px;
+    stroke: var(--color-accent);
+  }
+  .trust__title {
+    font-size: var(--text-body);
+    font-weight: var(--weight-bold);
+  }
+  .trust__body {
+    font-size: var(--text-body-sm);
+    line-height: var(--leading-body);
+    color: var(--color-muted);
+  }
+</style>
