@@ -3,6 +3,8 @@ import { NextResponse, type NextRequest } from "next/server";
 // Cookie name matches backend/app/core/auth.py SESSION_COOKIE_NAME = "session".
 // Cookie-presence ONLY: the FastAPI AuthMiddleware remains the source of truth
 // for cookie validity (it already returns 401 on forged/expired cookies).
+// A STALE cookie therefore passes this check; lib/session-expiry.ts recovers
+// from that on the first 401 by clearing the cookie and redirecting to /login.
 const SESSION_COOKIE = "session";
 
 // Consult GET /api/setup/status to learn whether the instance has been claimed.
