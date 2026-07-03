@@ -13,7 +13,7 @@
     "test:e2e:snapshots": "PW_BASE_URL=http://localhost:8081 playwright test --project=snapshots-chromium",
     "test:e2e:screenshots": "PW_BASE_URL=http://localhost:8081 playwright test --project=marketing-chromium",
     "test:e2e:update": "PW_BASE_URL=http://localhost:8081 playwright test --project=snapshots-chromium --update-snapshots",
-    "test:e2e:regen-db": "cd .. && docker compose -f compose.yml -f compose.test.yml run --rm -v $PWD/scripts:/app/scripts:ro -v $PWD/tests:/app/tests -e PYTHONPATH=/app api python scripts/seed-golden.py"
+    "test:e2e:regen-db": "cd .. && docker compose -f compose.yml -f compose.test.yml run --rm -v $PWD/scripts:/app/scripts:ro -v $PWD/tests:/app/tests -e PYTHONPATH=/app flowfolio python scripts/seed-golden.py"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

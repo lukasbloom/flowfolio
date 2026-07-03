@@ -8,7 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   - "snapshots-chromium": snapshot specs against the hermetic test stack (http://localhost:8081)
  *
  * Start stacks before running:
- *   Dev:   docker compose -f compose.yml -f compose.dev.yml up -d
+ *   Dev:   docker compose -f compose.multi.yml -f compose.dev.yml up -d
  *   Test:  docker compose -f compose.yml -f compose.test.yml up -d
  */
 export default defineConfig({
