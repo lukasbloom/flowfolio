@@ -1,0 +1,20 @@
+# Caddyfile for the MULTI-CONTAINER stack (compose.multi.yml and its dev/test
+# overlays). The repo-root Caddyfile is the single-image variant: it listens on
+# :8080 and proxies to loopback (127.0.0.1) because every process shares one
+# container. Here api and web are separate services, so Caddy listens on :80
+# (compose.multi.yml maps host 8080 -> container 80) and proxies by service name.
+:80 {
+    header {
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "same-origin"
+    }
+
+    handle /api/* {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy web:3000
+    }
+}

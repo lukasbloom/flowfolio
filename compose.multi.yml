@@ -38,7 +38,10 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddyfile.multi proxies by service name (api:8000 / web:3000). The
+      # repo-root Caddyfile is the single-image loopback variant and does NOT
+      # work across separate containers.
+      - ./Caddyfile.multi:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
