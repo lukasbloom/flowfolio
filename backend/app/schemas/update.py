@@ -41,6 +41,17 @@ class UpdateStatusResponse(BaseModel):
     update_log_tail: str | None = None
 
 
+class CheckResponse(BaseModel):
+    """POST /api/update/check result: the outcome and the freshly cached latest.
+
+    status is "ok" or "failed" (the check soft-fails on a GitHub error rather than
+    raising). latest_version mirrors the newly cached release, or None on failure.
+    """
+
+    status: str
+    latest_version: str | None = None
+
+
 class DismissBody(BaseModel):
     """Body for PUT /api/update/dismiss, the version being dismissed."""
 

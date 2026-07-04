@@ -13,10 +13,12 @@ from app.core.database import get_db
 from app.core.deps import forbid_in_demo
 from app.schemas.update import (
     ApplyResponse,
+    CheckResponse,
     DismissBody,
     UpdateStatusResponse,
     VersionResponse,
 )
+from app.services.update_check import run_version_check
 from app.services.update_apply import (
     IN_FLIGHT_STATES,
     read_update_status,
@@ -124,6 +126,23 @@ async def apply_update(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return ApplyResponse(request_id=request_id, state=read_update_status()["state"])
+
+
+@router.post("/check", response_model=CheckResponse)
+async def check_for_update(
+    db: AsyncSession = Depends(get_db),
+) -> CheckResponse:
+    """Force an immediate GitHub release check, bypassing the once-per-UTC-day
+    cron cadence. Refreshes the cached latest release so the UI can reflect a
+    release published since the last daily run. Soft-fails: a network/HTTP error
+    records status=failed rather than raising, mirroring the scheduled job.
+    Session-gated by AuthMiddleware like the rest of /api/update/*."""
+    result = await run_version_check(db)
+    await db.commit()
+    return CheckResponse(
+        status=str(result["status"]),
+        latest_version=result["latest"],
+    )
 
 
 @router.put("/dismiss", status_code=204)

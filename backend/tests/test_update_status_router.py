@@ -144,6 +144,69 @@ async def test_status_makes_no_outbound_call(authed, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_check_now_refreshes_cache(authed, monkeypatch):
+    """POST /api/update/check forces an immediate GitHub re-check, bypassing the
+    once-per-UTC-day cron cadence, and updates the cached latest release."""
+    import app.services.update_check as update_check_mod
+    from tests.test_update_check import _VALID_RELEASE, _fake_client_factory
+
+    client, _maker = authed
+    monkeypatch.setattr(
+        update_check_mod.httpx, "AsyncClient", _fake_client_factory(_VALID_RELEASE)
+    )
+    resp = await client.post("/api/update/check")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["latest_version"] == "v1.3.0"
+
+    # The cached status the banner/settings read now reflects the fresh result.
+    status = (await client.get("/api/update-status")).json()
+    assert status["latest_version"] == "v1.3.0"
+    assert status["update_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_check_now_soft_fails_without_raising(authed, monkeypatch):
+    """A GitHub hiccup must not 500 the endpoint — it reports status=failed."""
+    import app.services.update_check as update_check_mod
+    from tests.test_update_check import _fake_client_factory
+
+    client, _maker = authed
+    monkeypatch.setattr(
+        update_check_mod.httpx,
+        "AsyncClient",
+        _fake_client_factory({}, get_raises=RuntimeError("boom")),
+    )
+    resp = await client.post("/api/update/check")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_check_now_unauthenticated_401():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    attach_sqlite_pragmas(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_db():
+        async with maker() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = override_db
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.post("/api/update/check")
+            assert resp.status_code == 401
+    finally:
+        app.dependency_overrides.clear()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_status_unauthenticated_401():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     attach_sqlite_pragmas(engine)

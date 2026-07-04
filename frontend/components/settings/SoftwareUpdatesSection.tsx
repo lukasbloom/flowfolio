@@ -71,6 +71,19 @@ export function SoftwareUpdatesSection() {
     },
   });
 
+  // Force an immediate GitHub re-check (the daily cron only refreshes once per
+  // UTC day). Refetch the status afterward so the panel + banner reflect it.
+  const checkMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<{ status: string; latest_version: string | null }>(
+        "/api/update/check",
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["update-status"] });
+    },
+  });
+
   // Hide the Settings "Software updates" panel in demo mode. UI
   // defense-in-depth ONLY — the enforcing control is the 403 on POST
   // /api/update/apply, which blocks a direct API call regardless of the UI.
@@ -117,20 +130,35 @@ export function SoftwareUpdatesSection() {
           )}
         </div>
 
-        {updateAvailable ? (
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           <Button
-            onClick={() => setConfirmOpen(true)}
-            disabled={busy}
-            className="shrink-0 min-h-11 sm:min-h-9"
+            variant="outline"
+            onClick={() => checkMutation.mutate()}
+            disabled={busy || checkMutation.isPending}
+            className="min-h-11 sm:min-h-9"
           >
-            {busy ? (
+            {checkMutation.isPending ? (
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             ) : null}
-            <span className={busy ? "ml-1.5" : undefined}>
-              {inProgress ? "Updating…" : "Update now"}
+            <span className={checkMutation.isPending ? "ml-1.5" : undefined}>
+              {checkMutation.isPending ? "Checking…" : "Check for updates"}
             </span>
           </Button>
-        ) : null}
+          {updateAvailable ? (
+            <Button
+              onClick={() => setConfirmOpen(true)}
+              disabled={busy}
+              className="min-h-11 sm:min-h-9"
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : null}
+              <span className={busy ? "ml-1.5" : undefined}>
+                {inProgress ? "Updating…" : "Update now"}
+              </span>
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {data?.latest_version ? (
