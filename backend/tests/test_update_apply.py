@@ -264,6 +264,19 @@ async def test_apply_409_when_target_equals_current(authed):
 
 
 @pytest.mark.asyncio
+async def test_apply_409_on_dev_build(authed):
+    """Self-update can't work on a source-mounted dev build — no image to pull.
+    The apply endpoint refuses so a stray click or direct API call can't kick the
+    updater against a dev stack (defense in depth, independent of UI hiding)."""
+    client, maker, channel_dir = authed
+    cfg_module.settings.app_version = "dev"
+    await _seed_release(maker, version="v1.3.0")
+    resp = await client.post("/api/update/apply")
+    assert resp.status_code == 409, resp.text
+    assert not (channel_dir / "request.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_apply_403_in_demo_mode(authed, monkeypatch):
     """The self-update apply path is hard-blocked at the API layer in demo
     mode. forbid_in_demo returns 403 before the body, so no request.json is

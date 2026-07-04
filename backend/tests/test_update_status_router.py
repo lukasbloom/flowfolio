@@ -82,6 +82,30 @@ async def test_no_update_when_current_is_latest(authed):
 
 
 @pytest.mark.asyncio
+async def test_dev_build_reports_is_dev_and_suppresses_update(authed):
+    """A source-mounted dev build (app_version == 'dev') can't self-update, and
+    'dev' isn't comparable to a release (dev is usually AHEAD of the latest tag).
+    So no update prompt, and is_dev flags the state for the Settings note."""
+    client, maker = authed
+    cfg_module.settings.app_version = "dev"
+    await _seed_release(maker, version="v1.3.0")
+    body = (await client.get("/api/update-status")).json()
+    assert body["current_version"] == "dev"
+    assert body["latest_version"] == "v1.3.0"
+    assert body["is_dev"] is True
+    assert body["update_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_release_build_is_not_dev(authed):
+    client, maker = authed
+    await _seed_release(maker, version="v1.3.0")
+    body = (await client.get("/api/update-status")).json()
+    assert body["is_dev"] is False
+    assert body["update_available"] is True
+
+
+@pytest.mark.asyncio
 async def test_dismiss_hides_then_newer_reappears(authed):
     client, maker = authed
     await _seed_release(maker, version="v1.3.0")

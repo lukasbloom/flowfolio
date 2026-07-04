@@ -49,8 +49,14 @@ async def get_update_status(
     dismissed_version = await get_dismissed_version(db)
     latest = cached.latest_version
 
+    # A dev build is source-mounted: no image to pull, and "dev" is not comparable
+    # to a release (the working tree is usually AHEAD of the latest tag). Suppress
+    # the update prompt entirely and surface is_dev so the UI can explain why.
+    is_dev = current == "dev"
     dismissed = latest is not None and dismissed_version == latest
-    update_available = latest is not None and latest != current and not dismissed
+    update_available = (
+        latest is not None and latest != current and not dismissed and not is_dev
+    )
 
     # Merge the updater's live progress from the shared-volume status.json.
     # Pure file read — no Docker, no outbound call.
@@ -60,6 +66,7 @@ async def get_update_status(
         current_version=current,
         latest_version=latest,
         update_available=update_available,
+        is_dev=is_dev,
         release_notes_url=cached.notes_url,
         dismissed=dismissed,
         last_checked=cached.last_checked,
@@ -93,6 +100,14 @@ async def apply_update(
     direct API call) can never trigger a container recreate (defense in
     depth independent of any UI hiding).
     """
+    # A dev build has no image to pull — self-update cannot work. Refuse here so a
+    # stray click or a direct API call can never kick the updater against a
+    # source-mounted stack (defense in depth, independent of the UI hiding).
+    if settings.app_version == "dev":
+        raise HTTPException(
+            status_code=409,
+            detail="Self-update is not available on a development build.",
+        )
     cached = await get_cached_release(db)
     target = cached.latest_version
     if not target:

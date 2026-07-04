@@ -11,7 +11,7 @@ import { UpdateConfirmDialog } from "@/components/update/UpdateConfirmDialog";
 import { UpdateOverlay } from "@/components/update/UpdateOverlay";
 import { apiFetch } from "@/lib/api-client";
 import { useConfig } from "@/lib/config";
-import { withV } from "@/lib/update-status";
+import { updateActionable, withV } from "@/lib/update-status";
 
 interface UpdateStatusResponse {
   current_version: string;
@@ -21,6 +21,7 @@ interface UpdateStatusResponse {
   dismissed: boolean;
   last_checked: string | null;
   check_failed: boolean;
+  is_dev: boolean;
   backups_configured: boolean;
   update_in_progress: boolean;
   update_state: string | null;
@@ -80,12 +81,16 @@ export function SoftwareUpdatesSection() {
   const busy = inProgress || applyMutation.isPending;
 
   // The panel always shows TRUE availability — unlike the banner it ignores the
-  // dismissed flag. A failed daily check takes precedence in the copy.
+  // dismissed flag. A failed daily check takes precedence in the copy. A dev
+  // build is never actionable (updateActionable returns false on is_dev).
   const updateAvailable =
     data != null &&
-    !data.check_failed &&
-    data.latest_version != null &&
-    data.latest_version !== data.current_version;
+    updateActionable({
+      checkFailed: data.check_failed,
+      isDev: data.is_dev,
+      latestVersion: data.latest_version,
+      currentVersion: data.current_version,
+    });
 
   return (
     <section
@@ -161,6 +166,24 @@ function StatusLine({
   updateAvailable: boolean;
 }) {
   const current = withV(data.current_version);
+
+  // Dev build: self-update can't run (source-mounted, no image to pull), and the
+  // version comparison is meaningless. Explain rather than offer a broken action.
+  if (data.is_dev) {
+    return (
+      <div className="space-y-1">
+        <p className="text-sm text-muted-foreground">
+          Development build ({current}). Self-update isn&apos;t available on dev
+          builds — update by pulling the latest source and rebuilding.
+        </p>
+        {data.latest_version ? (
+          <p className="text-sm text-muted-foreground">
+            Latest release: {withV(data.latest_version)}.
+          </p>
+        ) : null}
+      </div>
+    );
+  }
 
   if (data.check_failed) {
     return (
