@@ -14,6 +14,11 @@ services:
   api:
     # Reuse the image built from ./backend (system-installed deps), but bind-mount
     # the source so file edits are visible to the running container.
+    # APP_ENV now defaults to production; pin development for the dev stack so
+    # Swagger stays reachable and the session cookie is not Secure over the
+    # plain-HTTP localhost:8080 dev URL. Merges over the inherited environment.
+    environment:
+      - APP_ENV=development
     # Override the prod volumes list to drop the .env-as-file mount (it would
     # land at backend/.env after the ./backend:/app bind shadows it). Load env
     # vars via env_file instead so the same .env at the repo root is honored.

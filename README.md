@@ -38,7 +38,7 @@ cp .env.example .env   # then edit .env (see Configuration below)
 docker compose up -d
 ```
 
-If `DOMAIN` is set in your `.env`, Caddy serves your instance over HTTPS on ports 80 and 443 with certificates obtained automatically from Let's Encrypt. If `DOMAIN` is left unset, the app is served over plain HTTP on port 8080 for any hostname, which covers both a local trial at http://localhost:8080 and running behind your own reverse proxy that already terminates TLS. In the reverse-proxy case, point your proxy at the container's port 8080 and set `APP_ENV=production` (see Configuration).
+If `DOMAIN` is set in your `.env`, Caddy serves your instance over HTTPS on ports 80 and 443 with certificates obtained automatically from Let's Encrypt. If `DOMAIN` is left unset, the app is served over plain HTTP on port 8080 for any hostname, which covers both a local trial at http://localhost:8080 and running behind your own reverse proxy that already terminates TLS. In the reverse-proxy case, just point your proxy at the container's port 8080; the app defaults to production hardening, so no extra configuration is needed.
 
 To kick the tyres without cloning anything, you can run the published image directly:
 
@@ -55,7 +55,7 @@ Configuration is driven by environment variables, set in a `.env` file next to `
 | Variable | Purpose |
 |----------|---------|
 | `DOMAIN` | Your public hostname. Set it to enable automatic HTTPS on ports 80/443. Leave unset for local HTTP on port 8080, or when running behind your own reverse proxy (the app then serves plain HTTP on 8080 for any hostname). |
-| `APP_ENV` | Usually unset: with `DOMAIN` configured the app runs in production mode (Swagger docs off, HTTPS-only session cookie), otherwise in development mode. Set to `production` when running behind your own reverse proxy (`DOMAIN` is unset there, so the session cookie would otherwise not be marked `Secure`). |
+| `APP_ENV` | Defaults to `production` (Swagger docs off, `Secure` session cookie, boot guards on) — leave it unset for any real deployment and it hardens automatically. Set to `development` only for a plain-HTTP local trial, where a `Secure` cookie can't ride `http://localhost` (Chrome and Firefox tolerate it, Safari does not). |
 | `APP_PASSWORD` | Optional pre-seeded login password. If unset, you set the password on first run. |
 | `SECRET_KEY` | Session-signing key. Auto-generated if left unset. |
 | `BACKUP_ENCRYPTION_KEY` | Encryption key for backup artifacts. |

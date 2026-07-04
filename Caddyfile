@@ -4,8 +4,8 @@
 #                    behind-a-reverse-proxy case: your proxy terminates TLS and
 #                    forwards whatever Host it likes, and a port-only site address
 #                    matches every Host (a host-locked `localhost` block would
-#                    answer proxied requests with an empty 200). Set APP_ENV=production
-#                    in that setup so the session cookie is marked Secure.
+#                    answer proxied requests with an empty 200). The session
+#                    cookie is Secure by default (APP_ENV defaults to production).
 #   DOMAIN=host   -> Caddy runs ACME automatic HTTPS on 443 for that hostname
 #                    (the zero-extra-infra path: expose 80/443, get HTTPS).
 # The no-DOMAIN case stays plain HTTP — no self-signed cert directive — because

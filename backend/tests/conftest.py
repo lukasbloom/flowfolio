@@ -24,6 +24,18 @@ Conventions
 """
 from __future__ import annotations
 
+# ruff: noqa: E402 — APP_ENV must be set before the app package is imported
+# below, so the app imports intentionally follow that statement.
+import os
+
+# The native suite runs in development, mirroring compose.test.yml's explicit
+# APP_ENV=development. APP_ENV now defaults to production, which marks the session
+# cookie Secure — and the ASGI test client speaks plain HTTP, so a Secure cookie
+# would never be sent back and every cookie-authenticated router test would 401.
+# Set BEFORE any app import so the module-level `settings = Settings()` singleton
+# reads it. test_app_env_default.py controls APP_ENV per-test via monkeypatch.
+os.environ["APP_ENV"] = "development"
+
 from datetime import date as date_t
 from decimal import Decimal
 from typing import Any

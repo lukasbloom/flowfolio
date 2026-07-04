@@ -27,9 +27,9 @@ services:
     environment:
       # Bare hostname => Caddy runs ACME auto-HTTPS; unset => http://localhost:8080.
       - DOMAIN=${DOMAIN:-}
-      # Unset derives from DOMAIN (domain => production: Swagger off + Secure
-      # cookie; none => development so the localhost trial can log in). Set
-      # explicitly only to override — see .env.example.
+      # Defaults to production (Swagger off + Secure cookie + boot guards). Empty
+      # passes through and still resolves to production in the app. Set
+      # APP_ENV=development only for a plain-HTTP local trial — see .env.example.
       - APP_ENV=${APP_ENV:-}
       - APP_PASSWORD=${APP_PASSWORD:-}            # optional pre-seed
       - SECRET_KEY=${SECRET_KEY:-}                # optional; auto-gen if unset

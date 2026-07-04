@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,25 +22,16 @@ class Settings(BaseSettings):
     # in production by assert_production_safety.
     app_password: str | None = None
 
-    # The public hostname Caddy serves HTTPS for (same DOMAIN env the compose
-    # stack hands to Caddy). Only read here to derive app_env below.
-    domain: str | None = None
-
-    # APP_ENV gates production-only behaviour:
-    # - "production": Swagger /api/docs and /api/openapi.json are disabled,
-    #                 cookies are sent with `secure=True` (HTTPS-only via Caddy)
-    # - "development": Swagger enabled, cookies allow plain HTTP
-    # Unset derives from DOMAIN: a domain means HTTPS is live, so production
-    # hardening switches on without a second variable. An explicit value always
-    # wins (e.g. APP_ENV=production behind an external TLS proxy with no DOMAIN,
-    # or APP_ENV=development to debug Swagger on a domain install).
-    app_env: str = ""
-
-    @model_validator(mode="after")
-    def _derive_app_env(self) -> "Settings":
-        if not self.app_env:
-            self.app_env = "production" if self.domain else "development"
-        return self
+    # APP_ENV gates production-only hardening:
+    # - "production" (default): Swagger /api/docs and /api/openapi.json disabled,
+    #                 session cookie sent with `secure=True` (HTTPS-only), and the
+    #                 boot guards in main.py (default-secret + pinned-clock) active.
+    # - "development": Swagger enabled, cookie allowed over plain HTTP, guards off.
+    # Production is the default so a self-hosted install is hardened without an
+    # extra variable (fail-safe). Set APP_ENV=development explicitly to opt out —
+    # e.g. a plain-HTTP local trial where a Secure cookie can't ride HTTP. The
+    # dev/test compose overlays set it; the demo stays production.
+    app_env: str = "production"
 
     # Clock pin for snapshot test runs. In production both stay
     # at their default; compose.test.yml sets these for the hermetic suite.
@@ -121,6 +112,16 @@ class Settings(BaseSettings):
         # An empty/blank APP_VERSION (e.g. unset build-arg) means an untagged
         # build, fall back to "dev" rather than reporting "".
         return v.strip() or "dev"
+
+    @field_validator("app_env")
+    @classmethod
+    def _blank_env_is_production(cls, v: str) -> str:
+        # compose.yml passes `APP_ENV=${APP_ENV:-}`, i.e. an EMPTY string when
+        # the operator sets nothing. Empty would otherwise override the
+        # "production" default with "" (falling out of production). Treat blank
+        # as production so the fail-safe default holds whether APP_ENV is unset
+        # or passed empty. An explicit "development" still passes through.
+        return v.strip() or "production"
 
 
 settings = Settings()
