@@ -8,7 +8,8 @@
 # substitution only falls back to the default when the var is UNSET, not when
 # it is empty — an empty value collapses the site-address line and breaks the
 # Caddyfile (the `header` block then parses as a global option). So we UNSET an
-# empty DOMAIN here, letting `{$DOMAIN:http://localhost:8080}` take its default.
+# empty DOMAIN here, letting `{$DOMAIN::8080}` take its default (plain HTTP on
+# 8080 for any Host — see Caddyfile).
 if [ -z "${DOMAIN:-}" ]; then
     unset DOMAIN
 fi
