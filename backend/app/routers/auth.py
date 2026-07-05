@@ -20,7 +20,16 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.setup_state import bump_token_epoch, get_token_epoch, set_admin_password_hash
+from app.services import totp
+from app.services.setup_state import (
+    bump_token_epoch,
+    get_token_epoch,
+    get_totp_secret,
+    is_totp_enabled,
+    set_admin_password_hash,
+    set_totp_enabled,
+    set_totp_secret,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -150,6 +159,62 @@ async def change_password(
         secure=settings.app_env == "production",
         max_age=settings.session_expire_seconds,
     )
+    return {"status": "ok"}
+
+
+class CodeRequest(BaseModel):
+    code: str
+
+
+class PasswordConfirm(BaseModel):
+    password: str
+
+
+@router.get("/2fa")
+async def twofa_status(session: AsyncSession = Depends(get_db)) -> dict[str, bool]:
+    """Whether TOTP 2FA is currently enabled."""
+    return {"enabled": await is_totp_enabled(session)}
+
+
+@router.post("/2fa/setup")
+async def twofa_setup(session: AsyncSession = Depends(get_db)) -> dict[str, str]:
+    """Generate a new pending TOTP secret and return its enrollment material.
+
+    Overwrites any prior pending secret and resets enabled to false. A fresh
+    setup call always starts a clean enrollment (the old secret, if any, is
+    discarded and not reusable to enable 2FA).
+    """
+    secret = totp.generate_secret()
+    await set_totp_secret(session, secret)
+    await set_totp_enabled(session, False)
+    await session.commit()
+    uri = totp.provisioning_uri(secret)
+    return {"secret": secret, "otpauth_uri": uri, "qr_svg": totp.qr_svg_data_uri(uri)}
+
+
+@router.post("/2fa/enable")
+async def twofa_enable(
+    body: CodeRequest, session: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    """Verify a TOTP code against the pending secret, then enable 2FA."""
+    secret = await get_totp_secret(session)
+    if not secret or not totp.verify_code(secret, body.code):
+        raise HTTPException(status_code=400, detail="Invalid code")
+    await set_totp_enabled(session, True)
+    await session.commit()
+    return {"status": "ok"}
+
+
+@router.post("/2fa/disable")
+async def twofa_disable(
+    body: PasswordConfirm, session: AsyncSession = Depends(get_db)
+) -> dict[str, str]:
+    """Password-confirmed disable: clears the stored secret and turns 2FA off."""
+    if not await check_password(session, body.password):
+        raise HTTPException(status_code=401, detail="Password is incorrect")
+    await set_totp_secret(session, None)
+    await set_totp_enabled(session, False)
+    await session.commit()
     return {"status": "ok"}
 
 
