@@ -182,8 +182,15 @@ async def twofa_setup(session: AsyncSession = Depends(get_db)) -> dict[str, str]
 
     Overwrites any prior pending secret and resets enabled to false. A fresh
     setup call always starts a clean enrollment (the old secret, if any, is
-    discarded and not reusable to enable 2FA).
+    discarded and not reusable to enable 2FA). Refuses to run while 2FA is
+    already enabled, since overwriting the secret would silently disable it
+    without the password check that /2fa/disable requires.
     """
+    if await is_totp_enabled(session):
+        raise HTTPException(
+            status_code=409,
+            detail="Disable two-factor authentication before re-enrolling.",
+        )
     secret = totp.generate_secret()
     await set_totp_secret(session, secret)
     await set_totp_enabled(session, False)

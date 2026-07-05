@@ -7,6 +7,8 @@ Validates:
   without flipping the enabled flag
 - POST /2fa/enable with a valid TOTP code flips status to enabled
 - POST /2fa/enable with a wrong code returns 400
+- POST /2fa/enable with no pending secret (no prior setup call) returns 400
+- POST /2fa/setup while 2FA is enabled returns 409 and does not disable it
 - POST /2fa/disable with the correct password clears the secret and disables,
   so a later setup call issues a brand new secret
 - POST /2fa/disable with the wrong password returns 401
@@ -102,6 +104,28 @@ async def test_enable_with_wrong_code_returns_400(authed):
 
     status = await client.get("/api/auth/2fa")
     assert status.json() == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_enable_with_no_pending_secret_returns_400(authed):
+    client, _maker = authed
+    resp = await client.post("/api/auth/2fa/enable", json={"code": "123456"})
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_setup_while_enabled_returns_409_and_does_not_disable(authed):
+    client, _maker = authed
+    setup = await client.post("/api/auth/2fa/setup")
+    secret = setup.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+    await client.post("/api/auth/2fa/enable", json={"code": code})
+
+    resp = await client.post("/api/auth/2fa/setup")
+    assert resp.status_code == 409
+
+    status = await client.get("/api/auth/2fa")
+    assert status.json() == {"enabled": True}
 
 
 @pytest.mark.asyncio
