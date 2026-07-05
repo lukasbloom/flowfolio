@@ -119,3 +119,40 @@ async def test_below_threshold_then_success_resets(client):
     resp = await client.post("/api/auth/login", json={"password": GOOD})
     assert resp.status_code == 200
     assert auth_router._failed_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_2fa_failures_lock_out_login(client):
+    """5 failed /login/2fa attempts arm the shared lockout that blocks /login.
+
+    /login/2fa checks the lockout before touching the pre-auth token or the
+    TOTP code, and calls _register_failure() on any bad request, so a garbage
+    body trips the same counter /login uses. No 2FA enrollment is needed.
+    """
+    for _ in range(5):
+        resp = await client.post(
+            "/api/auth/login/2fa",
+            json={"pre_auth_token": "bad", "code": "000000"},
+        )
+        assert resp.status_code == 401
+
+    # The /login/2fa failures armed the shared lockout, so /login is blocked
+    # even with the correct password.
+    resp = await client.post("/api/auth/login", json={"password": GOOD})
+    assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_login_failures_lock_out_2fa(client):
+    """5 failed /login attempts arm the shared lockout that blocks /login/2fa."""
+    for _ in range(5):
+        resp = await client.post("/api/auth/login", json={"password": BAD})
+        assert resp.status_code == 401
+
+    # The /login failures armed the shared lockout, so /login/2fa is blocked
+    # regardless of the pre-auth token or code supplied.
+    resp = await client.post(
+        "/api/auth/login/2fa",
+        json={"pre_auth_token": "bad", "code": "000000"},
+    )
+    assert resp.status_code == 429
