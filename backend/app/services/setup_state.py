@@ -11,7 +11,7 @@ settings allowlist, so they are upserted directly (not via settings.validate_set
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,10 @@ from app.core.security import hash_password
 from app.models.user_setting import UserSetting
 
 # Setup-owned user_setting keys (distinct schema from SETTING_KEYS_ALLOWLIST).
-SETUP_KEYS = ("admin_password_hash", "setup_complete")
+SETUP_KEYS = (
+    "admin_password_hash", "setup_complete",
+    "totp_secret", "totp_enabled", "token_epoch",
+)
 
 
 async def _get_value(session: AsyncSession, key: str) -> str | None:
@@ -27,6 +30,19 @@ async def _get_value(session: AsyncSession, key: str) -> str | None:
         select(UserSetting.value).where(UserSetting.key == key)
     )
     return result.scalar_one_or_none()
+
+
+async def _set_value(session: AsyncSession, key: str, value: str | None) -> None:
+    """Upsert (or delete when value is None) a setup-owned key."""
+    if value is None:
+        await session.execute(delete(UserSetting).where(UserSetting.key == key))
+        return
+    stmt = (
+        sqlite_insert(UserSetting)
+        .values(key=key, value=value)
+        .on_conflict_do_update(index_elements=["key"], set_={"value": value})
+    )
+    await session.execute(stmt)
 
 
 async def is_setup_complete(session: AsyncSession) -> bool:
@@ -82,3 +98,30 @@ async def pre_seed_admin_password_from_env(
     # rows. The bool return is irrelevant here (boot is single-threaded and we
     # already confirmed the instance is unclaimed); never raises on a clean DB.
     await claim_admin_password(session, app_password)
+
+
+async def get_totp_secret(session: AsyncSession) -> str | None:
+    return await _get_value(session, "totp_secret")
+
+
+async def set_totp_secret(session: AsyncSession, secret: str | None) -> None:
+    await _set_value(session, "totp_secret", secret)
+
+
+async def is_totp_enabled(session: AsyncSession) -> bool:
+    return await _get_value(session, "totp_enabled") == "true"
+
+
+async def set_totp_enabled(session: AsyncSession, enabled: bool) -> None:
+    await _set_value(session, "totp_enabled", "true" if enabled else "false")
+
+
+async def get_token_epoch(session: AsyncSession) -> int:
+    raw = await _get_value(session, "token_epoch")
+    return int(raw) if raw is not None else 0
+
+
+async def bump_token_epoch(session: AsyncSession) -> int:
+    new = await get_token_epoch(session) + 1
+    await _set_value(session, "token_epoch", str(new))
+    return new
