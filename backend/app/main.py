@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # APP_PASSWORD is unset or the instance is already claimed.
     from app.core.database import async_session_factory
     from app.services.key_store import load_key_cache
-    from app.services.setup_state import pre_seed_admin_password_from_env
+    from app.services.setup_state import get_token_epoch, pre_seed_admin_password_from_env
 
     async with async_session_factory() as session:
         await pre_seed_admin_password_from_env(session, settings.app_password)
@@ -192,6 +192,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # the persisted user_setting rows (read-only). Runs after migrations so
         # user_setting exists; the write-invalidate half lives in set_key/clear_key.
         await load_key_cache(session)
+        # Cache the token epoch on app.state so AuthMiddleware never needs a
+        # per-request DB read to validate a session. Whatever bumps the
+        # stored epoch (e.g. a password change) must also update
+        # app.state.token_epoch in-process to take effect immediately.
+        app.state.token_epoch = await get_token_epoch(session)
 
     # Suppress APScheduler on the test stack. Cron triggers use the asyncio
     # event-loop clock (real time), so jobs would otherwise fire mid-suite and
@@ -220,6 +225,12 @@ app = FastAPI(
     openapi_url=_openapi_url,
     lifespan=lifespan,
 )
+
+# Safe default so AuthMiddleware's getattr(request.app.state, "token_epoch", 0)
+# always has a value even in tests that hit the app via ASGITransport without
+# running the lifespan (httpx's ASGITransport does not send lifespan events).
+# The real lifespan above overwrites this with the DB-backed epoch at boot.
+app.state.token_epoch = 0
 
 # IMPORTANT: middleware order matters in Starlette — last added is the
 # outermost wrapper. AuthMiddleware must wrap the routers but sit inside

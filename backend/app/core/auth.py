@@ -8,9 +8,18 @@ Approach:
 - check_password reads the hash from the DB and bcrypt-verifies the candidate.
   When no hash is configured (unclaimed instance) it returns False.
 - A successful login returns a signed JWT (HS256, signed with settings.secret_key)
-  carrying `sub="user"` and an `exp` claim. The JWT is set as an HTTP-only cookie
-  so JavaScript on the page cannot exfiltrate it (XSS protection).
-- AuthMiddleware validates the cookie on every request to a non-exempt path.
+  carrying `sub="user"`, an `exp` claim, and a `token_epoch` claim. The JWT is
+  set as an HTTP-only cookie so JavaScript on the page cannot exfiltrate it
+  (XSS protection).
+- AuthMiddleware validates the cookie on every request to a non-exempt path,
+  checking the token's epoch against the current stored epoch (cached on
+  app.state, see main.py's lifespan). Bumping the stored epoch (on password
+  change) invalidates every session minted before the bump, giving
+  server-side revocation without a session store.
+- A pre-auth token (create_pre_auth_token/validate_pre_auth_token) is a
+  separate, short-lived JWT proving password verification while 2FA is
+  pending. It carries a `stage="2fa"` claim instead of `sub`/`token_epoch`,
+  so it is never accepted as a session token and vice versa.
 
 To rotate the password: claim a new one via the setup API (or clear the row and
 re-seed via APP_PASSWORD at boot).
@@ -43,28 +52,60 @@ async def check_password(session: AsyncSession, plain_password: str) -> bool:
     return verify_password(plain_password, stored)
 
 
-def create_session_token() -> str:
-    """Create a signed JWT session token with `exp` set per settings."""
+_PRE_AUTH_TTL_SECONDS = 300  # 5 min
+
+
+def create_session_token(token_epoch: int) -> str:
+    """Create a signed JWT session token with `exp` and `token_epoch` set.
+
+    `token_epoch` must match the current stored epoch (see
+    app.services.setup_state.get_token_epoch/bump_token_epoch) for the token
+    to validate. Bumping the epoch (on password change) invalidates every
+    session minted before the bump, without needing a server-side session
+    store.
+    """
     expire = datetime.now(timezone.utc) + timedelta(
         seconds=settings.session_expire_seconds
     )
-    payload = {"sub": "user", "exp": expire}
+    payload = {"sub": "user", "exp": expire, "token_epoch": token_epoch}
     return jwt.encode(payload, settings.secret_key, algorithm=ALGORITHM)
 
 
-def validate_session_token(token: str) -> bool:
-    """Return True if token is a valid, correctly signed, non-expired session.
+def session_token_epoch(token: str) -> int | None:
+    """Return the token's `token_epoch` claim, or None if invalid/expired.
 
-    Accepted limitation: a token's only expiry guard is its JWT `exp`
-    (the 7-day session window). There is no server-side revocation — no `iat`
-    floor and no token epoch — so logout clears only the client cookie and a
-    password change does NOT invalidate existing sessions. Rotating SECRET_KEY
-    is the blunt "log out everywhere" lever. For a single-user self-hosted box
-    this is acceptable; a per-instance `token_epoch` claim (bumped on password
-    change) is the future hardening if revocation is ever needed.
+    A token with no `token_epoch` claim (minted before this feature) reads
+    as epoch 0, so pre-existing sessions survive against the default stored
+    epoch of 0.
     """
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
     except JWTError:
+        return None
+    if payload.get("sub") != "user":
+        return None
+    return int(payload.get("token_epoch", 0))
+
+
+def validate_session_token(token: str, current_epoch: int) -> bool:
+    """Return True if token is valid, correctly signed, non-expired, and its
+    epoch matches current_epoch (server-side revocation via epoch bump)."""
+    epoch = session_token_epoch(token)
+    return epoch is not None and epoch == current_epoch
+
+
+def create_pre_auth_token() -> str:
+    """Create a short-lived token proving password verification, pending 2FA."""
+    expire = datetime.now(timezone.utc) + timedelta(seconds=_PRE_AUTH_TTL_SECONDS)
+    return jwt.encode(
+        {"stage": "2fa", "exp": expire}, settings.secret_key, algorithm=ALGORITHM
+    )
+
+
+def validate_pre_auth_token(token: str) -> bool:
+    """Return True if token is a valid, unexpired pre-auth (2fa stage) token."""
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
+    except JWTError:
         return False
-    return payload.get("sub") == "user"
+    return payload.get("stage") == "2fa"

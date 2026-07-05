@@ -67,7 +67,7 @@ async def test_demo_login_mints_session_when_demo_on(client):
     assert resp.headers["location"] == "/track"
     token = resp.cookies.get(SESSION_COOKIE_NAME)
     assert token is not None
-    assert validate_session_token(token) is True
+    assert validate_session_token(token, current_epoch=0) is True
     set_cookie_header = resp.headers.get("set-cookie", "")
     assert "HttpOnly" in set_cookie_header
     assert "SameSite=strict" in set_cookie_header

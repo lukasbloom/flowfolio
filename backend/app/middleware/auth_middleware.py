@@ -22,6 +22,7 @@ from app.core.auth import SESSION_COOKIE_NAME, validate_session_token
 AUTH_EXEMPT_PATHS: frozenset[str] = frozenset(
     {
         "/api/auth/login",
+        "/api/auth/login/2fa",
         "/api/auth/logout",
         "/api/auth/demo-login",  # demo-only credential-free entry; 404s outside demo
 
@@ -51,7 +52,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         token = request.cookies.get(SESSION_COOKIE_NAME)
-        if not token or not validate_session_token(token):
+        # Cached on app.state at boot (see main.py lifespan) so validating a
+        # session never costs a per-request DB read.
+        current_epoch = getattr(request.app.state, "token_epoch", 0)
+        if not token or not validate_session_token(token, current_epoch):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Authentication required"},

@@ -18,7 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import SESSION_COOKIE_NAME, create_session_token
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.setup_state import claim_admin_password, is_setup_complete
+from app.services.setup_state import (
+    claim_admin_password,
+    get_token_epoch,
+    is_setup_complete,
+)
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -59,7 +63,9 @@ async def claim(
         # Lost the atomic claim race to a concurrent first visitor.
         raise HTTPException(status_code=409, detail="Setup already complete")
 
-    token = create_session_token()
+    # A freshly-claimed instance is always at epoch 0 (nothing has bumped it yet).
+    epoch = await get_token_epoch(session)
+    token = create_session_token(epoch)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,

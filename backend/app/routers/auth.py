@@ -19,6 +19,7 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.core.database import get_db
+from app.services.setup_state import get_token_epoch
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -94,7 +95,8 @@ async def login(
 
     # Successful login clears the brute-force counter and any active lockout.
     _reset_rate_limiter()
-    token = create_session_token()
+    epoch = await get_token_epoch(session)
+    token = create_session_token(epoch)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -115,12 +117,14 @@ async def demo_login() -> RedirectResponse:
     Mints the STANDARD session JWT (create_session_token) with the SAME cookie
     attributes as the password login, so the entire downstream auth model is
     byte-for-byte identical to normal mode. The password POST /api/auth/login
-    path is never touched (no check_password, no throttle interaction).
+    path is never touched (no check_password, no throttle interaction). Uses
+    epoch 0 (no session dependency here; the demo never changes its password,
+    so its epoch never bumps).
     """
     if not settings.demo_mode:
         raise HTTPException(status_code=404, detail="Not found")
 
-    token = create_session_token()
+    token = create_session_token(0)
     response = RedirectResponse(url="/track", status_code=303)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
