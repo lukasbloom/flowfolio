@@ -4,6 +4,10 @@
 Run inside the container: docker exec <container> python /app/scripts/reset-2fa.py
 """
 import asyncio
+import sys
+
+sys.path.insert(0, "/app")
+
 from app.core.database import AsyncSessionLocal
 from app.services.setup_state import set_totp_secret, set_totp_enabled
 

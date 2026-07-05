@@ -71,7 +71,7 @@ If you lose access to your authenticator app while 2FA is enabled, you can disab
 docker exec <container_name> python /app/scripts/reset-2fa.py
 ```
 
-This clears the 2FA secret and logs you out of other active sessions. Log in with your password to re-enable 2FA or regain access. Changing your password also revokes all other active sessions.
+This clears the 2FA secret and disables 2FA. Log in with your password to re-enable 2FA or regain access. Changing your password also revokes all other active sessions.
 
 ## License
 
