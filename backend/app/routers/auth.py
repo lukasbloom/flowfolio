@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import (
     SESSION_COOKIE_NAME,
     check_password,
+    create_pre_auth_token,
     create_session_token,
     hash_password,
+    validate_pre_auth_token,
 )
 from app.core.config import settings
 from app.core.database import get_db
@@ -105,6 +107,13 @@ async def login(
 
     # Successful login clears the brute-force counter and any active lockout.
     _reset_rate_limiter()
+
+    if await is_totp_enabled(session):
+        # Password OK but 2FA is required: hand back a short-lived pre-auth
+        # token proving the password check passed. NO session cookie yet,
+        # the browser is not authenticated until POST /login/2fa succeeds.
+        return {"twofa_required": "true", "pre_auth_token": create_pre_auth_token()}
+
     epoch = await get_token_epoch(session)
     token = create_session_token(epoch)
     response.set_cookie(
@@ -113,6 +122,55 @@ async def login(
         httponly=True,                         # XSS: JS cannot read cookie
         samesite="strict",                     # CSRF protection (strict: no cross-site send)
         secure=settings.app_env == "production",  # HTTPS-only in prod (Caddy)
+        max_age=settings.session_expire_seconds,
+    )
+    return {"status": "ok"}
+
+
+class TwoFactorLoginRequest(BaseModel):
+    pre_auth_token: str
+    code: str
+
+
+@router.post("/login/2fa")
+async def login_2fa(
+    body: TwoFactorLoginRequest,
+    response: Response,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Second step of two-step login: verify the pre-auth token + TOTP code.
+
+    Shares the same brute-force throttle as /login (module-global
+    `_locked_until`/`_register_failure`/`_reset_rate_limiter`), so a lockout
+    armed by repeated wrong codes here also blocks the password step, and
+    vice versa. This route is listed in AUTH_EXEMPT_PATHS.
+    """
+    now = time.monotonic()
+    if now < _locked_until:
+        retry_after = int(_locked_until - now) + 1
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    secret = await get_totp_secret(session)
+    if (
+        not validate_pre_auth_token(body.pre_auth_token)
+        or not secret
+        or not totp.verify_code(secret, body.code)
+    ):
+        _register_failure()
+        raise HTTPException(status_code=401, detail="Invalid code")
+
+    _reset_rate_limiter()
+    epoch = await get_token_epoch(session)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=create_session_token(epoch),
+        httponly=True,
+        samesite="strict",
+        secure=settings.app_env == "production",
         max_age=settings.session_expire_seconds,
     )
     return {"status": "ok"}
