@@ -1,7 +1,13 @@
-"""Auth router: POST /api/auth/login, POST /api/auth/logout.
+"""Auth router: login, logout, password change, and TOTP 2FA management.
 
-Both endpoints are exempt from AuthMiddleware (see middleware/auth_middleware.py).
-The login endpoint sets an HTTP-only session cookie; logout clears it.
+Endpoints: POST /login (+ two-step POST /login/2fa when 2FA is on), POST
+/logout, GET /demo-login, POST /password, and the 2FA lifecycle (GET /2fa,
+POST /2fa/setup, POST /2fa/enable, POST /2fa/disable).
+
+/password, /2fa/setup, /2fa/enable, and /2fa/disable are forbidden in demo
+mode (forbid_in_demo). /login, /logout, /demo-login, and /login/2fa are
+exempt from AuthMiddleware (see middleware/auth_middleware.py) since they
+run before a session cookie exists.
 """
 from __future__ import annotations
 
@@ -106,14 +112,19 @@ async def login(
         _register_failure()
         raise HTTPException(status_code=401, detail="Invalid password")
 
-    # Successful login clears the brute-force counter and any active lockout.
-    _reset_rate_limiter()
-
     if await is_totp_enabled(session):
         # Password OK but 2FA is required: hand back a short-lived pre-auth
         # token proving the password check passed. NO session cookie yet,
         # the browser is not authenticated until POST /login/2fa succeeds.
+        # Do NOT reset the rate limiter here: login is not yet complete, and
+        # resetting on a correct password would let an attacker who knows the
+        # password wipe an in-progress TOTP brute-force lockout between
+        # batches of /login/2fa guesses. The limiter only resets once login
+        # actually completes (below, or in login_2fa on a correct code).
         return {"twofa_required": "true", "pre_auth_token": create_pre_auth_token()}
+
+    # Successful login clears the brute-force counter and any active lockout.
+    _reset_rate_limiter()
 
     epoch = await get_token_epoch(session)
     token = create_session_token(epoch)

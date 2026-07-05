@@ -20,5 +20,5 @@ def verify_code(secret: str, code: str) -> bool:
 
 
 def qr_svg_data_uri(otpauth_uri: str) -> str:
-    """Inline SVG data URI for the otpauth URI — rendered client-side, no external call."""
+    """Inline SVG data URI for the otpauth URI, rendered client-side, no external call."""
     return segno.make(otpauth_uri).svg_data_uri()

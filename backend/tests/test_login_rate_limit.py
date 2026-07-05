@@ -6,6 +6,8 @@ Validates:
 - the 429 response carries a Retry-After header
 - once the lockout expires, the correct password succeeds and clears all state
 - fewer than threshold failures followed by a success works and resets state
+- a correct password mid-2FA does NOT reset an in-progress /login/2fa
+  failure streak (the streak only resets when login actually completes)
 
 The rate limiter is module-global state (single-user, single-worker design), so
 every test resets it via the autouse fixture to stay isolated.
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import time
 
+import pyotp
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -151,6 +154,72 @@ async def test_login_failures_lock_out_2fa(client):
 
     # The /login failures armed the shared lockout, so /login/2fa is blocked
     # regardless of the pre-auth token or code supplied.
+    resp = await client.post(
+        "/api/auth/login/2fa",
+        json={"pre_auth_token": "bad", "code": "000000"},
+    )
+    assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_correct_password_mid_2fa_does_not_reset_failure_streak(client):
+    """A correct-password /login while 2FA is pending must NOT reset the streak.
+
+    Regression test: /login used to call _reset_rate_limiter() before checking
+    is_totp_enabled, so an attacker who already knows the password could wipe
+    an in-progress /login/2fa failure streak between batches of TOTP guesses,
+    and the lockout would never accumulate. This enrolls 2FA, racks up 4
+    failed /login/2fa attempts (one below _LOCKOUT_THRESHOLD), posts the
+    correct password to /login mid-2FA (must NOT reset the streak), then
+    registers one more failure to prove it is the 5th and arms the lockout.
+
+    Fails on the old code: the pre-fix /login reset _failed_attempts to 0
+    before returning twofa_required, so the assertion right after that call
+    (_failed_attempts == 4) would fail, and the streak would restart at 1
+    instead of reaching 5.
+    """
+    login = await client.post("/api/auth/login", json={"password": GOOD})
+    assert login.status_code == 200, login.text
+
+    setup = await client.post("/api/auth/2fa/setup")
+    assert setup.status_code == 200, setup.text
+    secret = setup.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+
+    enable = await client.post("/api/auth/2fa/enable", json={"code": code})
+    assert enable.status_code == 200, enable.text
+
+    await client.post("/api/auth/logout")
+    client.cookies.clear()
+
+    # 4 failed /login/2fa attempts: below the lockout threshold.
+    for _ in range(4):
+        resp = await client.post(
+            "/api/auth/login/2fa",
+            json={"pre_auth_token": "bad", "code": "000000"},
+        )
+        assert resp.status_code == 401
+    assert auth_router._failed_attempts == 4
+    assert auth_router._locked_until == 0.0
+
+    # Correct password mid-2FA: must return twofa_required and NOT reset
+    # the failure streak (the whole point of this regression test).
+    resp = await client.post("/api/auth/login", json={"password": GOOD})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["twofa_required"] == "true"
+    assert auth_router._failed_attempts == 4
+    assert auth_router._locked_until == 0.0
+
+    # One more failure is now the 5th and arms the lockout.
+    resp = await client.post(
+        "/api/auth/login/2fa",
+        json={"pre_auth_token": "bad", "code": "000000"},
+    )
+    assert resp.status_code == 401
+    assert auth_router._failed_attempts == 5
+    assert auth_router._locked_until > time.monotonic()
+
+    # The next request is now blocked regardless of endpoint.
     resp = await client.post(
         "/api/auth/login/2fa",
         json={"pre_auth_token": "bad", "code": "000000"},
