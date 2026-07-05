@@ -18,11 +18,24 @@ import {
 import { Input } from "@/components/ui/input";
 import { ApiError, apiFetch } from "@/lib/api-client";
 
-const schema = z.object({
+const passwordSchema = z.object({
   password: z.string().min(1, "Password required"),
 });
 
-type FormValues = z.infer<typeof schema>;
+const codeSchema = z.object({
+  code: z.string().min(1, "Code required"),
+});
+
+type PasswordFormValues = z.infer<typeof passwordSchema>;
+type CodeFormValues = z.infer<typeof codeSchema>;
+
+// Body of POST /api/auth/login. 2FA off: {status: "ok"} (cookie set).
+// 2FA on: {twofa_required: "true", pre_auth_token} (no cookie).
+type LoginResponse = {
+  status?: string;
+  twofa_required?: string;
+  pre_auth_token?: string;
+};
 
 function LoginForm() {
   const router = useRouter();
@@ -30,44 +43,121 @@ function LoginForm() {
   const next = searchParams.get("next");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [preAuthToken, setPreAuthToken] = useState<string | null>(null);
 
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
+  const passwordForm = useForm<PasswordFormValues>({
+    resolver: zodResolver(passwordSchema),
     defaultValues: { password: "" },
   });
 
-  async function onSubmit(values: FormValues) {
+  const codeForm = useForm<CodeFormValues>({
+    resolver: zodResolver(codeSchema),
+    defaultValues: { code: "" },
+  });
+
+  function redirectAfterLogin() {
+    // Open-redirect guard: only allow same-origin paths.
+    // - "/path"  → same-origin (allowed)
+    // - "//foo"  → protocol-relative URL that escapes origin (rejected)
+    // - "http://..." → does not start with "/" (rejected)
+    const safeNext =
+      next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
+    router.replace(safeNext);
+    router.refresh();
+  }
+
+  async function onSubmitPassword(values: PasswordFormValues) {
     setSubmitError(null);
     setSubmitting(true);
     try {
-      await apiFetch("/api/auth/login", {
+      const response = await apiFetch<LoginResponse>("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ password: values.password }),
       });
-      // Open-redirect guard: only allow same-origin paths.
-      // - "/path"  → same-origin (allowed)
-      // - "//foo"  → protocol-relative URL that escapes origin (rejected)
-      // - "http://..." → does not start with "/" (rejected)
-      const safeNext =
-        next && next.startsWith("/") && !next.startsWith("//") ? next : "/";
-      router.replace(safeNext);
-      router.refresh();
+      if (response?.twofa_required === "true" && response.pre_auth_token) {
+        setPreAuthToken(response.pre_auth_token);
+        setSubmitting(false);
+        return;
+      }
+      redirectAfterLogin();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setSubmitError("Invalid password");
       } else {
         setSubmitError(err instanceof Error ? err.message : "Login failed");
       }
-      form.reset({ password: "" }); // clear password on failure
+      passwordForm.reset({ password: "" }); // clear password on failure
       setSubmitting(false);
     }
   }
 
+  async function onSubmitCode(values: CodeFormValues) {
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      await apiFetch("/api/auth/login/2fa", {
+        method: "POST",
+        body: JSON.stringify({ pre_auth_token: preAuthToken, code: values.code }),
+      });
+      redirectAfterLogin();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        // Keep the pre_auth_token so the user can retry with a fresh code.
+        // If the token itself has since expired the retry just 401s again,
+        // which is acceptable (matches the task's stated tradeoff).
+        setSubmitError("Invalid code");
+      } else {
+        setSubmitError(err instanceof Error ? err.message : "Login failed");
+      }
+      codeForm.reset({ code: "" });
+      setSubmitting(false);
+    }
+  }
+
+  if (preAuthToken) {
+    return (
+      <Form {...codeForm}>
+        <form onSubmit={codeForm.handleSubmit(onSubmitCode)} className="space-y-4">
+          <FormField
+            control={codeForm.control}
+            name="code"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Authentication code</FormLabel>
+                <FormControl>
+                  <Input
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    autoFocus
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          {submitError ? (
+            <p className="text-sm text-negative" role="alert">
+              {submitError}
+            </p>
+          ) : null}
+          <Button type="submit" className="w-full min-h-11" disabled={submitting}>
+            {submitting ? "Verifying…" : "Verify"}
+          </Button>
+        </form>
+      </Form>
+    );
+  }
+
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+    <Form {...passwordForm}>
+      <form
+        onSubmit={passwordForm.handleSubmit(onSubmitPassword)}
+        className="space-y-4"
+      >
         <FormField
-          control={form.control}
+          control={passwordForm.control}
           name="password"
           render={({ field }) => (
             <FormItem>
