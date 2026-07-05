@@ -63,6 +63,16 @@ Configuration is driven by environment variables, set in a `.env` file next to `
 
 Pricing API keys (Finnhub, CoinGecko) are not environment variables — configure them in-app under Settings after logging in. See `.env.example` for the full annotated list, including the rclone settings used for off-host backups.
 
+## Account Recovery
+
+If you lose access to your authenticator app while 2FA is enabled, you can disable it by running a reset script inside the container:
+
+```bash
+docker exec <container_name> python /app/scripts/reset-2fa.py
+```
+
+This clears the 2FA secret and logs you out of other active sessions. Log in with your password to re-enable 2FA or regain access. Changing your password also revokes all other active sessions.
+
 ## License
 
 Flowfolio is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for the full text. The strong copyleft of AGPL-3.0 matches Flowfolio's self-hosted, anti-SaaS ethos: if you run a modified version as a network service, you must share your source.
