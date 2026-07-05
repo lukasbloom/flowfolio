@@ -55,6 +55,11 @@ async def get_admin_password_hash(session: AsyncSession) -> str | None:
     return await _get_value(session, "admin_password_hash")
 
 
+async def set_admin_password_hash(session: AsyncSession, password_hash: str) -> None:
+    """Overwrite the stored bcrypt admin password hash (used by password change)."""
+    await _set_value(session, "admin_password_hash", password_hash)
+
+
 async def claim_admin_password(session: AsyncSession, password: str) -> bool:
     """Atomically claim the instance; return True iff THIS call won the claim.
 

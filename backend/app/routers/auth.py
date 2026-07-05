@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +16,11 @@ from app.core.auth import (
     SESSION_COOKIE_NAME,
     check_password,
     create_session_token,
+    hash_password,
 )
 from app.core.config import settings
 from app.core.database import get_db
-from app.services.setup_state import get_token_epoch
+from app.services.setup_state import bump_token_epoch, get_token_epoch, set_admin_password_hash
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -103,6 +104,50 @@ async def login(
         httponly=True,                         # XSS: JS cannot read cookie
         samesite="strict",                     # CSRF protection (strict: no cross-site send)
         secure=settings.app_env == "production",  # HTTPS-only in prod (Caddy)
+        max_age=settings.session_expire_seconds,
+    )
+    return {"status": "ok"}
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/password")
+async def change_password(
+    body: PasswordChangeRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    """Change the admin password and revoke every other session.
+
+    Requires an already-valid session cookie (this endpoint is not in
+    AUTH_EXEMPT_PATHS, so AuthMiddleware gates it) plus the current password,
+    so an attacker who steals a live session still cannot take over the
+    account without knowing the password. Bumping token_epoch invalidates
+    every session minted before the change; the caller's own cookie is
+    re-issued at the new epoch in the same response so this endpoint does
+    not log the caller out of their own change.
+    """
+    if not await check_password(session, body.current_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=422, detail="New password must be at least 8 characters"
+        )
+    await set_admin_password_hash(session, hash_password(body.new_password))
+    new_epoch = await bump_token_epoch(session)
+    await session.commit()
+    # Keep the middleware's cached epoch coherent without a process restart.
+    request.app.state.token_epoch = new_epoch
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=create_session_token(new_epoch),
+        httponly=True,
+        samesite="strict",
+        secure=settings.app_env == "production",
         max_age=settings.session_expire_seconds,
     )
     return {"status": "ok"}
