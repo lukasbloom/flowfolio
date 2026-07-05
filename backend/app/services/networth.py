@@ -13,8 +13,8 @@ from app.core.constants import TIMEFRAMES as _BASE_TIMEFRAMES
 from app.core.constants import VALUE_SCALE, ZERO
 from app.models import FxRate, HoldingTag, Instrument, PriceQuote, Tag, Transaction
 from app.services.cost_basis import _load_allocations, _open_lots_at
+from app.services.date_cursor import ForwardCursor
 from app.services.quotes import MissingFxRateError, convert
-from app.services.quotes import quote_on_or_before as _quote_on_or_before
 
 # networth's value/cost-basis quantization scale (1e-8). Aliased from the
 # centralized VALUE_SCALE; the historical local name UNIT_SCALE is retained.
@@ -148,89 +148,128 @@ async def get_networth_series(
     daily_cost_basis: list[DailyPoint] = []
     warnings: list[str] = []
     seen_warnings: set[str] = set()
+
+    # Forward cursors replace the per-day linear scans. `current` advances
+    # monotonically and every list is date-sorted, so a single forward-only index
+    # reproduces `[x for x in xs if x.date <= current][-1]` while touching each
+    # element at most once overall (see date_cursor.ForwardCursor). One quote
+    # cursor and one synthetic-trade-price cursor per instrument, one fx cursor.
+    quote_cursors: dict[str, ForwardCursor] = {}
+    synth_cursors: dict[str, ForwardCursor] = {}
+
+    def _quote_cursor(iid: str) -> ForwardCursor:
+        cur = quote_cursors.get(iid)
+        if cur is None:
+            cur = ForwardCursor(quotes_by_instrument.get(iid, []), key=lambda q: q.date)
+            quote_cursors[iid] = cur
+        return cur
+
+    def _synth_cursor(iid: str) -> ForwardCursor:
+        cur = synth_cursors.get(iid)
+        if cur is None:
+            cur = ForwardCursor(
+                txns_with_price_by_instrument.get(iid, []), key=lambda t: t.date
+            )
+            synth_cursors[iid] = cur
+        return cur
+
+    fx_dates_sorted = sorted(fx_by_date)
+    fx_cursor = ForwardCursor(fx_dates_sorted, key=lambda d: d)
+
+    # Cost-basis: memoize each buy lot's OWN buy-date fx rate once (as_of=buy_date
+    # is fixed per lot, not monotonic with `current`), and cache the FIFO open-lot
+    # decomposition — it changes only on buy/sell/spend dates, so recompute only
+    # when the transaction frontier advanced this day.
+    buy_rate_cache: dict[date, Decimal | None] = {}
+
+    def _buy_rate(buy_date: date) -> Decimal | None:
+        if buy_date not in buy_rate_cache:
+            try:
+                buy_rate_cache[buy_date] = _fx_on_or_before(fx_by_date, buy_date)
+            except MissingFxRateError:
+                buy_rate_cache[buy_date] = None
+        return buy_rate_cache[buy_date]
+
+    cached_open_lots: list[tuple[date, Decimal]] | None = None
+
     current = range_start
     while current <= range_end:
+        txn_index_before = txn_index
         while txn_index < len(transactions) and transactions[txn_index].date <= current:
             txn = transactions[txn_index]
             positions[(txn.account_id, txn.instrument_id)] += txn.quantity
             txn_index += 1
 
+        # One fx resolution per day (as_of=current for every position); None when
+        # `current` precedes the first fx row (mirrors _fx_on_or_before raising).
+        day_fx_date = fx_cursor.at(current)
+        day_fx = fx_by_date[day_fx_date] if day_fx_date is not None else None
+
         total = ZERO
         for (_, instrument_id), quantity in positions.items():
             if quantity <= ZERO:
                 continue
-            quote = _quote_on_or_before(quotes_by_instrument.get(instrument_id, []), current)
+            quote = _quote_cursor(instrument_id).at(current)
             if quote is not None:
                 price, price_currency = quote.price, quote.currency
             else:
-                # Fall back to the most-recent priced txn for this
-                # instrument when no real PriceQuote exists yet. Carries the
-                # last-known trade price forward — same algorithm
-                # `_quote_on_or_before` uses for stale weekend quotes, just
-                # over a different source. Most useful for the gap between a
-                # buy and the first market quote, but the fallback applies
-                # any time a PriceQuote is missing — so a stale trade price
-                # may persist for arbitrary spans if real quotes never land.
-                synthetic = _synthetic_quote_on_or_before(
-                    txns_with_price_by_instrument.get(instrument_id, []), current
-                )
-                if synthetic is None:
+                # No real PriceQuote yet: carry the most-recent priced-txn trade
+                # price forward (same at-or-before rule, different source).
+                synthetic = _synth_cursor(instrument_id).at(current)
+                if (
+                    synthetic is None
+                    or synthetic.unit_price is None
+                    or synthetic.price_currency is None
+                ):
                     warning = f"missing_price:{instrument_id}:{current.isoformat()}"
                     if warning not in seen_warnings:
                         warnings.append(warning)
                         seen_warnings.add(warning)
                     continue
-                price, price_currency = synthetic
-            try:
-                total += _convert_amount(
-                    amount=quantity * price,
-                    from_currency=price_currency,
-                    to_currency=display_currency,
-                    fx_by_date=fx_by_date,
-                    as_of=current,
-                )
-            except MissingFxRateError:
-                # Degrade gracefully: surface as a per-day warning (matching
-                # the missing_price pattern) and skip this holding's
-                # contribution rather than 500ing the whole replay.
+                price, price_currency = synthetic.unit_price, synthetic.price_currency
+            if price_currency == display_currency:
+                total += quantity * price
+            elif day_fx is None:
+                # Degrade gracefully: per-day warning + skip this holding rather
+                # than 500ing the replay (matches the missing_price pattern).
                 warning = f"missing_fx:{current.isoformat()}"
                 if warning not in seen_warnings:
                     warnings.append(warning)
                     seen_warnings.add(warning)
                 continue
+            else:
+                total += convert(
+                    quantity * price, price_currency, display_currency, day_fx
+                )
 
         daily_points.append(DailyPoint(date=current, value=_quantize_value(total)))
 
         if include_cost_basis:
-            # Transaction-time FX (cost-basis-line-drifts-daily): convert each
-            # open buy lot's EUR cost basis at ITS OWN transaction-date EUR/USD
-            # rate and sum in display currency, so the cost-basis line only steps
-            # on transaction days in every display currency instead of drifting
-            # daily with FX on no-transaction days. EUR display short-circuits
-            # (from==to) so the per-lot sum equals the EUR basis — byte-identical
-            # to the prior whole-sum _cost_basis_at conversion. Kept consistent
-            # with contributions.get_cost_basis_series so both endpoints agree.
+            # Transaction-time FX (cost-basis-line-drifts-daily): convert each open
+            # buy lot's EUR cost basis at ITS OWN buy-date EUR/USD rate and sum in
+            # display currency, so the line only steps on transaction days. EUR
+            # display short-circuits (from==to). The open-lot set is recomputed
+            # only when the frontier advanced (it changes only on buy/sell/spend
+            # dates); the per-lot sum still runs every day so the missing_fx
+            # warning emission stays byte-identical to the prior per-day rebuild.
+            if cached_open_lots is None or txn_index != txn_index_before:
+                cached_open_lots = _open_lots_at(
+                    cost_basis_buys, cost_basis_allocations, current
+                )
             cost_display = ZERO
-            for buy_date, open_eur in _open_lots_at(
-                cost_basis_buys, cost_basis_allocations, current
-            ):
-                try:
-                    cost_display += _convert_amount(
-                        amount=open_eur,
-                        from_currency="EUR",
-                        to_currency=display_currency,
-                        fx_by_date=fx_by_date,
-                        as_of=buy_date,
-                    )
-                except MissingFxRateError:
-                    # Same degrade-gracefully posture as the value loop above:
-                    # surface a per-day missing_fx warning (deduped) and add
-                    # this lot's EUR amount unconverted so the chart still draws.
+            for buy_date, open_eur in cached_open_lots:
+                if display_currency == "EUR":
+                    cost_display += open_eur
+                    continue
+                rate = _buy_rate(buy_date)
+                if rate is None:
                     warning = f"missing_fx:{current.isoformat()}"
                     if warning not in seen_warnings:
                         warnings.append(warning)
                         seen_warnings.add(warning)
                     cost_display += open_eur
+                else:
+                    cost_display += convert(open_eur, "EUR", display_currency, rate)
             daily_cost_basis.append(
                 DailyPoint(date=current, value=_quantize_value(cost_display))
             )
@@ -542,24 +581,6 @@ async def _load_fx(session: AsyncSession, end: date) -> dict[date, Decimal]:
     )
     result = await session.execute(stmt)
     return {rate.date: rate.rate for rate in result.scalars()}
-
-
-def _synthetic_quote_on_or_before(
-    priced_txns: list[Transaction], as_of: date
-) -> tuple[Decimal, str] | None:
-    """Return (unit_price, price_currency) of the most-recent priced txn ≤ as_of.
-
-    Mirrors `_quote_on_or_before` semantics. Caller pre-filters `priced_txns`
-    to those carrying both `unit_price` and `price_currency`, so the None
-    re-checks below are belt-and-braces.
-    """
-    eligible = [t for t in priced_txns if t.date <= as_of]
-    if not eligible:
-        return None
-    txn = eligible[-1]
-    if txn.unit_price is None or txn.price_currency is None:
-        return None
-    return txn.unit_price, txn.price_currency
 
 
 def _convert_amount(
