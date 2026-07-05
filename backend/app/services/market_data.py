@@ -76,6 +76,17 @@ class MarketDataSnapshot:
         """
         return self._rate_on_or_before(self.as_of)
 
+    def sorted_fx_dates(self) -> list[date]:
+        """Ascending FX dates, for a forward-cursor / bisect at-or-before lookup
+        by per-date consumers that resolve many dates against the same map."""
+        return sorted(self._fx_by_date)
+
+    def rate_at(self, d: date) -> Decimal:
+        """The EUR/USD rate stored for the EXACT date ``d`` (a key of the map).
+        Pair with :meth:`sorted_fx_dates` for O(1)/O(log n) at-or-before lookups
+        without the per-call linear scan in :meth:`_rate_on_or_before`."""
+        return self._fx_by_date[d]
+
     def convert(
         self,
         amount: Decimal,

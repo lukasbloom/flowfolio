@@ -6,6 +6,7 @@ boundaries.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
@@ -19,9 +20,10 @@ from app.core.constants import VALUE_SCALE, ZERO
 from app.models import HoldingTag, LotAlloc, PriceQuote, Tag, Transaction
 from app.schemas.contributions import ContributionBucket, SeriesPoint
 from app.services.cost_basis import _cost_basis_at, _load_allocations, _open_lots_at
+from app.services.date_cursor import ForwardCursor
 from app.services.market_data import load_market_data
+from app.services.quotes import MissingFxRateError, convert
 from app.services.quotes import convert_currency as _convert_currency
-from app.services.quotes import quote_on_or_before as _quote_on_or_before
 
 # Re-exported here so existing imports (`from app.services.contributions import
 # _cost_basis_at`, etc.) continue to work — this module owned them historically
@@ -75,43 +77,89 @@ async def get_cost_basis_series(
     value_points: list[SeriesPoint] = []
     positions: dict[tuple[str, str], Decimal] = defaultdict(lambda: ZERO)
     txn_index = 0
+
+    # Forward cursors replace the per-day linear scans (mirrors networth): the
+    # loop advances `current` monotonically and quotes / fx dates are sorted, so a
+    # forward-only index reproduces `[x for x in xs if x.date <= current][-1]`.
+    quote_cursors: dict[str, ForwardCursor] = {}
+
+    def _quote_cursor(iid: str) -> ForwardCursor:
+        cur = quote_cursors.get(iid)
+        if cur is None:
+            cur = ForwardCursor(quotes_by_instrument.get(iid, []), key=lambda q: q.date)
+            quote_cursors[iid] = cur
+        return cur
+
+    fx_dates_sorted = snapshot.sorted_fx_dates()
+    fx_cursor = ForwardCursor(fx_dates_sorted, key=lambda d: d)
+
+    # Memoize each open lot's OWN buy-date fx rate once (buy_date is fixed per
+    # lot, not monotonic), and cache the FIFO open-lot decomposition — it changes
+    # only on buy/sell/spend dates, so recompute only when the frontier advanced.
+    buy_rate_cache: dict[date, Decimal] = {}
+
+    def _buy_rate(buy_date: date) -> Decimal:
+        rate = buy_rate_cache.get(buy_date)
+        if rate is None:
+            i = bisect_right(fx_dates_sorted, buy_date) - 1
+            if i < 0:
+                raise MissingFxRateError(
+                    f"missing EUR/USD FX rate for {buy_date.isoformat()}"
+                )
+            rate = snapshot.rate_at(fx_dates_sorted[i])
+            buy_rate_cache[buy_date] = rate
+        return rate
+
+    cached_open_lots: list[tuple[date, Decimal]] | None = None
+
     current = start
     while current <= end:
+        txn_index_before = txn_index
         while txn_index < len(txns) and txns[txn_index].date <= current:
             txn = txns[txn_index]
             positions[(txn.account_id, txn.instrument_id)] += txn.quantity
             txn_index += 1
 
-        # Transaction-time FX (cost-basis-line-drifts-daily): convert each open
-        # buy lot's EUR cost basis at ITS OWN transaction-date EUR/USD rate, then
-        # sum in display currency — a true "what I paid" line that only steps on
-        # transaction days in every display currency, instead of re-converting the
-        # whole EUR basis at each chart day's rate (which made the USD line drift
-        # daily with FX even on no-transaction days). For EUR display the convert
-        # short-circuits (from==to), so the per-lot sum equals the EUR basis and
-        # output is byte-identical to the prior _cost_basis_at conversion.
+        # Transaction-time FX: convert each open buy lot's EUR cost basis at ITS
+        # OWN buy-date EUR/USD rate (memoized), so the line only steps on
+        # transaction days. EUR display short-circuits (from==to). The open-lot
+        # set is recomputed only when the frontier advanced (it changes only on
+        # buy/sell/spend dates); the per-lot sum still runs every day.
+        if cached_open_lots is None or txn_index != txn_index_before:
+            cached_open_lots = _open_lots_at(buy_txns, allocations, current)
         cost_basis_display = ZERO
-        for buy_date, open_eur in _open_lots_at(buy_txns, allocations, current):
-            cost_basis_display += snapshot.convert(
-                open_eur, "EUR", display_currency, as_of=buy_date
-            )
+        for buy_date, open_eur in cached_open_lots:
+            if display_currency == "EUR":
+                cost_basis_display += open_eur
+            else:
+                cost_basis_display += convert(
+                    open_eur, "EUR", display_currency, _buy_rate(buy_date)
+                )
         cost_basis_points.append(
             SeriesPoint(date=current, value=cost_basis_display)
         )
 
+        day_fx_date = fx_cursor.at(current)
         total_value = ZERO
         for (_, instrument_id), quantity in positions.items():
             if quantity <= ZERO:
                 continue
-            quote = _quote_on_or_before(quotes_by_instrument.get(instrument_id, []), current)
+            quote = _quote_cursor(instrument_id).at(current)
             if quote is None:
                 continue
-            total_value += snapshot.convert(
-                quantity * quote.price,
-                quote.currency,
-                display_currency,
-                as_of=current,
-            )
+            if quote.currency == display_currency:
+                total_value += quantity * quote.price
+            elif day_fx_date is None:
+                raise MissingFxRateError(
+                    f"missing EUR/USD FX rate for {current.isoformat()}"
+                )
+            else:
+                total_value += convert(
+                    quantity * quote.price,
+                    quote.currency,
+                    display_currency,
+                    snapshot.rate_at(day_fx_date),
+                )
         value_points.append(
             SeriesPoint(date=current, value=total_value.quantize(VALUE_SCALE))
         )
