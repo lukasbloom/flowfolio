@@ -67,6 +67,57 @@ async def test_status_disabled_initially(authed):
 
 
 @pytest.mark.asyncio
+async def test_setup_403_in_demo_mode(authed, monkeypatch):
+    """forbid_in_demo returns 403 before the body runs: 2FA needs no
+    password, so an unguarded demo visitor could enable it and then be
+    unable to disable it."""
+    client, _maker = authed
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", True)
+
+    resp = await client.post("/api/auth/2fa/setup")
+    assert resp.status_code == 403, resp.text
+
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", False)
+    status = await client.get("/api/auth/2fa")
+    assert status.json() == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_enable_403_in_demo_mode(authed, monkeypatch):
+    """forbid_in_demo blocks /2fa/enable in demo mode before any state changes."""
+    client, _maker = authed
+    setup = await client.post("/api/auth/2fa/setup")
+    secret = setup.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", True)
+    resp = await client.post("/api/auth/2fa/enable", json={"code": code})
+    assert resp.status_code == 403, resp.text
+
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", False)
+    status = await client.get("/api/auth/2fa")
+    assert status.json() == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_disable_403_in_demo_mode(authed, monkeypatch):
+    """forbid_in_demo blocks /2fa/disable in demo mode before any state changes."""
+    client, _maker = authed
+    setup = await client.post("/api/auth/2fa/setup")
+    secret = setup.json()["secret"]
+    code = pyotp.TOTP(secret).now()
+    await client.post("/api/auth/2fa/enable", json={"code": code})
+
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", True)
+    resp = await client.post("/api/auth/2fa/disable", json={"password": "test-password-123"})
+    assert resp.status_code == 403, resp.text
+
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", False)
+    status = await client.get("/api/auth/2fa")
+    assert status.json() == {"enabled": True}
+
+
+@pytest.mark.asyncio
 async def test_setup_returns_secret_uri_and_qr_without_enabling(authed):
     client, _maker = authed
     resp = await client.post("/api/auth/2fa/setup")

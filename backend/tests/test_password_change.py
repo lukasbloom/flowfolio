@@ -91,6 +91,26 @@ async def test_change_password_too_short_returns_422(authed):
 
 
 @pytest.mark.asyncio
+async def test_change_password_403_in_demo_mode(authed, monkeypatch):
+    """forbid_in_demo returns 403 before the body runs: change_password
+    unconditionally bumps token_epoch, which would break the epoch-0
+    invariant demo_login depends on if a demo visitor could reach it."""
+    client, _maker = authed
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", True)
+
+    resp = await client.post(
+        "/api/auth/password",
+        json={"current_password": "test-password-123", "new_password": "new-password-456"},
+    )
+    assert resp.status_code == 403, resp.text
+
+    # No mutation happened: the old password still logs in.
+    monkeypatch.setattr(cfg_module.settings, "demo_mode", False)
+    login_old = await client.post("/api/auth/login", json={"password": "test-password-123"})
+    assert login_old.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_change_password_revokes_stale_session_but_keeps_caller(authed):
     """End-to-end revocation, driven through the ASGI client + AuthMiddleware.
 

@@ -22,6 +22,7 @@ from app.core.auth import (
 )
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.deps import forbid_in_demo
 from app.services import totp
 from app.services.setup_state import (
     bump_token_epoch,
@@ -181,7 +182,7 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
-@router.post("/password")
+@router.post("/password", dependencies=[Depends(forbid_in_demo)])
 async def change_password(
     body: PasswordChangeRequest,
     request: Request,
@@ -197,6 +198,10 @@ async def change_password(
     every session minted before the change; the caller's own cookie is
     re-issued at the new epoch in the same response so this endpoint does
     not log the caller out of their own change.
+
+    forbid_in_demo returns 403 before the body runs: an unconditional
+    token_epoch bump here would break the epoch-0 invariant demo_login
+    depends on (see its docstring).
     """
     if not await check_password(session, body.current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
@@ -234,7 +239,7 @@ async def twofa_status(session: AsyncSession = Depends(get_db)) -> dict[str, boo
     return {"enabled": await is_totp_enabled(session)}
 
 
-@router.post("/2fa/setup")
+@router.post("/2fa/setup", dependencies=[Depends(forbid_in_demo)])
 async def twofa_setup(session: AsyncSession = Depends(get_db)) -> dict[str, str]:
     """Generate a new pending TOTP secret and return its enrollment material.
 
@@ -243,6 +248,10 @@ async def twofa_setup(session: AsyncSession = Depends(get_db)) -> dict[str, str]
     discarded and not reusable to enable 2FA). Refuses to run while 2FA is
     already enabled, since overwriting the secret would silently disable it
     without the password check that /2fa/disable requires.
+
+    forbid_in_demo returns 403 before the body runs: 2FA setup needs no
+    password, so an unguarded demo visitor could enable it and then be
+    unable to disable it.
     """
     if await is_totp_enabled(session):
         raise HTTPException(
@@ -257,11 +266,14 @@ async def twofa_setup(session: AsyncSession = Depends(get_db)) -> dict[str, str]
     return {"secret": secret, "otpauth_uri": uri, "qr_svg": totp.qr_svg_data_uri(uri)}
 
 
-@router.post("/2fa/enable")
+@router.post("/2fa/enable", dependencies=[Depends(forbid_in_demo)])
 async def twofa_enable(
     body: CodeRequest, session: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
-    """Verify a TOTP code against the pending secret, then enable 2FA."""
+    """Verify a TOTP code against the pending secret, then enable 2FA.
+
+    forbid_in_demo returns 403 before the body runs (see twofa_setup).
+    """
     secret = await get_totp_secret(session)
     if not secret or not totp.verify_code(secret, body.code):
         raise HTTPException(status_code=400, detail="Invalid code")
@@ -270,11 +282,14 @@ async def twofa_enable(
     return {"status": "ok"}
 
 
-@router.post("/2fa/disable")
+@router.post("/2fa/disable", dependencies=[Depends(forbid_in_demo)])
 async def twofa_disable(
     body: PasswordConfirm, session: AsyncSession = Depends(get_db)
 ) -> dict[str, str]:
-    """Password-confirmed disable: clears the stored secret and turns 2FA off."""
+    """Password-confirmed disable: clears the stored secret and turns 2FA off.
+
+    forbid_in_demo returns 403 before the body runs (see twofa_setup).
+    """
     if not await check_password(session, body.password):
         raise HTTPException(status_code=401, detail="Password is incorrect")
     await set_totp_secret(session, None)

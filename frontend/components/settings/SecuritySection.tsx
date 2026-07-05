@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ApiError, apiFetch } from "@/lib/api-client";
 import { extractApiErrorMessage } from "@/lib/api-error-message";
+import { useConfig } from "@/lib/config";
 
 const schema = z
   .object({
@@ -35,6 +36,7 @@ type FormValues = z.infer<typeof schema>;
  * block can be added as a sibling within this section later without a rewrite.
  */
 export function SecuritySection() {
+  const { data: config } = useConfig();
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: { current_password: "", new_password: "", confirm: "" },
@@ -52,11 +54,19 @@ export function SecuritySection() {
     onSuccess: () => {
       form.reset({ current_password: "", new_password: "", confirm: "" });
     },
+    onError: () => {
+      form.reset({ current_password: "", new_password: "", confirm: "" });
+    },
   });
 
   function onSubmit(values: FormValues) {
     mutation.mutate(values);
   }
+
+  // Hide in demo mode. UI defense-in-depth ONLY: the enforcing control is
+  // the 403 from forbid_in_demo on POST /api/auth/password, which blocks a
+  // direct API call regardless of the UI.
+  if (config?.demo) return null;
 
   let errorMessage: string | null = null;
   if (mutation.isError) {
