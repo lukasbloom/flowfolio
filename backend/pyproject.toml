@@ -21,6 +21,8 @@ dependencies = [
     # fastest CSS-based HTML parser available, and the FT scrape only needs a
     # single CSS selector (`span.mod-ui-data-list__value`).
     "selectolax>=0.3,<1.0",
+    "pyotp>=2.9,<3",
+    "segno>=1.6,<2",
 ]
 
 [project.optional-dependencies]
