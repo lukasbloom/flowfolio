@@ -4,6 +4,7 @@ import { ConcentrationSettings } from "@/components/settings/ConcentrationSettin
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { MutedHoldingsList } from "@/components/settings/MutedHoldingsList";
 import { PriceHistorySection } from "@/components/settings/PriceHistorySection";
+import { SecuritySection } from "@/components/settings/SecuritySection";
 import { SoftwareUpdatesSection } from "@/components/settings/SoftwareUpdatesSection";
 import { UnclassifiedHint } from "@/components/settings/UnclassifiedHint";
 
@@ -44,6 +45,12 @@ export default function SettingsPage() {
 
       <section className="max-w-2xl">
         <SoftwareUpdatesSection />
+      </section>
+
+      <Separator className="my-8" />
+
+      <section className="max-w-2xl">
+        <SecuritySection />
       </section>
 
       <Separator className="my-8" />
