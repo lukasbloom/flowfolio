@@ -25,6 +25,23 @@ interface KeysResponse {
   providers: ProviderStatus[];
 }
 
+/**
+ * Free sources Flowfolio fetches from automatically that need no API key, so
+ * they never appear in the key list above. Listed here so the section reads as
+ * a complete data-source map rather than a keys-only view.
+ */
+const KEYLESS_SOURCES = [
+  {
+    label: "Binance",
+    blurb: "Primary crypto price history (backfill). Public API, no auth.",
+  },
+  { label: "Frankfurter (ECB)", blurb: "EUR/USD FX rates, sourced from the ECB." },
+  {
+    label: "FT.com",
+    blurb: "European funds, ETFs, and metals (NAV tear-sheet scrape).",
+  },
+] as const;
+
 /** Pull the human message out of a FastAPI `{ "detail": ... }` body, else raw text. */
 function errorDetail(err: unknown): string {
   if (err instanceof ApiError) {
@@ -89,7 +106,38 @@ export function DataSourcesSection() {
           ))}
         </ul>
       )}
+
+      <KeylessSources />
     </section>
+  );
+}
+
+/** Static list of the free, no-key sources Flowfolio also fetches from. */
+function KeylessSources() {
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium">No key needed</h3>
+      <p className="text-sm text-muted-foreground">
+        Flowfolio also fetches from these free sources automatically — nothing
+        to configure.
+      </p>
+      <ul className="divide-y divide-border rounded-lg border">
+        {KEYLESS_SOURCES.map((source) => (
+          <li
+            key={source.label}
+            className="flex items-start justify-between gap-3 px-3 py-3"
+          >
+            <div className="space-y-0.5">
+              <div className="font-medium">{source.label}</div>
+              <p className="text-sm text-muted-foreground">{source.blurb}</p>
+            </div>
+            <span className="shrink-0 font-mono text-sm text-muted-foreground">
+              No key
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
