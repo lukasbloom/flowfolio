@@ -1,0 +1,24 @@
+(flowfolio_site) {
+	header {
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+	}
+
+	handle /api/* {
+		reverse_proxy api.flowfolio_default:8000
+	}
+
+	handle {
+		reverse_proxy web.flowfolio_default:3000
+	}
+}
+
+:80 {
+	import flowfolio_site
+}
+
+flowfolio.test {
+	tls /certs/flowfolio.pem /certs/flowfolio-key.pem
+	import flowfolio_site
+}

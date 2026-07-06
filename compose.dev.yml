@@ -16,7 +16,7 @@ services:
     # the source so file edits are visible to the running container.
     # APP_ENV now defaults to production; pin development for the dev stack so
     # Swagger stays reachable and the session cookie is not Secure over the
-    # plain-HTTP localhost:8080 dev URL. Merges over the inherited environment.
+    # plain-HTTP localhost:8083 dev URL. Merges over the inherited environment.
     environment:
       - APP_ENV=development
     # Override the prod volumes list to drop the .env-as-file mount (it would

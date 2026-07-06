@@ -43,6 +43,9 @@ frontend/tsconfig.tsbuildinfo
 # Docker
 .dockerignore
 
+# Local mkcert certificates for dev-proxy
+/certs/
+
 # OS
 .DS_Store
 Thumbs.db

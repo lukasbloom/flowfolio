@@ -4,8 +4,8 @@ import { defineConfig, devices } from "@playwright/test";
  * Playwright config for Flowfolio frontend e2e tests.
  *
  * Two projects:
- *   - "chromium": integration specs against the dev compose stack (http://localhost:8080)
- *   - "snapshots-chromium": snapshot specs against the hermetic test stack (http://localhost:8081)
+ *   - "chromium": integration specs against the dev compose stack (http://localhost:8083)
+ *   - "snapshots-chromium": snapshot specs against the hermetic test stack (http://localhost:8091)
  *
  * Start stacks before running:
  *   Dev:   docker compose -f compose.multi.yml -f compose.dev.yml up -d
@@ -22,7 +22,7 @@ export default defineConfig({
   snapshotPathTemplate: "{snapshotDir}/{testFileName}/{arg}{ext}",
 
   use: {
-    baseURL: process.env.PW_BASE_URL ?? "http://localhost:8080",
+    baseURL: process.env.PW_BASE_URL ?? "http://localhost:8083",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -46,7 +46,7 @@ export default defineConfig({
         timezoneId: "UTC",
         locale: "en-GB",                    // match project formatRelativeHours decisions
         storageState: "tests/e2e/.auth/storageState.json",
-        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8081",
+        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8091",
       },
     },
     {
@@ -62,7 +62,7 @@ export default defineConfig({
         timezoneId: "UTC",
         locale: "en-GB",
         storageState: "tests/e2e/.auth/storageState.json",
-        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8081",
+        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8091",
       },
     },
   ],

@@ -1,4 +1,4 @@
-# Test overlay — hermetic snapshot suite at http://localhost:8081.
+# Test overlay — hermetic snapshot suite at http://localhost:8091.
 #
 # Usage:
 #   docker compose -f compose.yml -f compose.test.yml up -d
@@ -8,7 +8,7 @@
 # `flowfolio` service), so the snapshot/e2e suite exercises the SHIPPED artifact
 # (real boot order + s6 supervisor + Caddy routing), not three separate dev
 # containers. The single image serves HTTP on 8080 internally (Caddy no-DOMAIN);
-# this overlay publishes it on host 8081.
+# this overlay publishes it on host 8091.
 #
 # It boots the single `flowfolio` service with:
 #   - APP_PASSWORD=test                              (pre-seed → setup_complete
@@ -74,9 +74,9 @@ services:
       # so the test stack relies on the http_guard (FLOWFOLIO_NETWORK_HERMETIC)
       # plus an empty key store — clients raise "not configured" rather than fetch.
     # The single image serves HTTP on 8080 with no DOMAIN (vs the old caddy :80).
-    # Publish it on host 8081; the dev stack on 8080 stays untouched.
+    # Publish it on host 8091; the dev stack on 8083 stays untouched.
     ports: !override
-      - "8081:8080"
+      - "8091:8080"
 
 volumes:
   db_data_test:

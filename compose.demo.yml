@@ -1,4 +1,4 @@
-# Demo overlay — the public, credential-free playground at http://localhost:8082.
+# Demo overlay — the public, credential-free playground at http://localhost:8092.
 #
 # Usage:
 #   docker compose -f compose.yml -f compose.demo.yml up -d
@@ -33,7 +33,7 @@
 #                                                     It is NOT "changeme", so the
 #                                                     default-secrets guard is satisfied.)
 #   - db_data_demo (separate named volume — the prod db_data and backups are untouched)
-#   - host port 8082 (the dev stack on 8080 and the test stack on 8081 stay free)
+#   - host port 8092 (the dev stack on 8083 and the test stack on 8091 stay free)
 #
 # DELIBERATELY NOT SET:
 #   - SECRET_KEY                                      ensure_secret_key auto-generates and
@@ -86,10 +86,10 @@ services:
       - SECRET_KEY=
       - BACKUP_ENCRYPTION_KEY=
       - BACKUP_DEST=
-    # The single image serves HTTP on 8080 with no DOMAIN; publish it on host 8082
-    # so it does not collide with the dev (8080) or test (8081) stacks.
+    # The single image serves HTTP on 8080 with no DOMAIN; publish it on host 8092
+    # so it does not collide with the dev (8083) or test (8091) stacks.
     ports: !override
-      - "8082:8080"
+      - "8092:8080"
 
 volumes:
   db_data_demo:
