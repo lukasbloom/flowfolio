@@ -1,14 +1,17 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { InstrumentMultiSelect } from "@/components/ui/instrument-multi-select";
 import { TimeframeToggle } from "@/components/ui/timeframe-toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { apiFetch } from "@/lib/api-client";
 import { formatDateRange } from "@/lib/format";
 import { useInstrumentFilter } from "@/lib/instrument-filter";
+import { sanitizeInstrumentFilter } from "@/lib/instrument-filter-sanitize";
 import { usePref } from "@/lib/prefs";
 import { useTagFilter } from "@/lib/tag-filter";
 import { useCurrency } from "@/lib/currency";
@@ -24,6 +27,11 @@ const NW_SHOW_YIELDS_KEY = "flowfolio.nwShowYields";
 const NW_INSTRUMENT_FILTER_KEY = "flowfolio.instrumentFilter.networth";
 
 export type ChartViewMode = "value" | "price";
+
+interface InstrumentLite {
+  id: string;
+  symbol: string;
+}
 
 interface NetWorthSectionProps {
   /** Optional heading override; defaults to "Net worth". */
@@ -114,7 +122,35 @@ export function NetWorthSection({
   // is suppressed and the chart is fed `[instrumentId]` directly.
   const [filterIds, setFilterIds] = useInstrumentFilter(NW_INSTRUMENT_FILTER_KEY);
   const showFilterPill = !instrumentId;
-  const effectiveIds = instrumentId ? [instrumentId] : filterIds;
+
+  // The persisted filter (a cookie) can reference an instrument that no longer
+  // exists — after an instrument delete or a DB restore that changed the ids.
+  // Left unchecked, a stale id scopes the chart to a nonexistent instrument and
+  // it renders empty with no error. Validate against the live instrument list;
+  // this query shares the ["instruments"] cache with the chart and the
+  // multi-select, so it adds no request.
+  const { data: instruments } = useQuery<InstrumentLite[]>({
+    queryKey: ["instruments"],
+    queryFn: () => apiFetch<InstrumentLite[]>("/api/instruments"),
+    enabled: showFilterPill,
+    staleTime: 60_000,
+  });
+  const validFilterIds = useMemo(
+    () =>
+      instruments
+        ? sanitizeInstrumentFilter(filterIds, new Set(instruments.map((i) => i.id)))
+        : filterIds,
+    [instruments, filterIds]
+  );
+  // Self-heal: once the instrument list is known, rewrite the cookie without the
+  // stale ids so the cleanup persists across reloads instead of re-filtering
+  // every mount.
+  useEffect(() => {
+    if (!instruments) return;
+    if (validFilterIds.length !== filterIds.length) setFilterIds(validFilterIds);
+  }, [instruments, validFilterIds, filterIds, setFilterIds]);
+
+  const effectiveIds = instrumentId ? [instrumentId] : validFilterIds;
 
   // Price-mode hides cost-basis (semantically replaced by an avg-cost reference
   // line baked into the price chart) and yields (a EUR-denominated concept that
@@ -221,7 +257,7 @@ export function NetWorthSection({
           </div>
           {showFilterPill ? (
             <InstrumentMultiSelect
-              value={filterIds}
+              value={validFilterIds}
               onChange={setFilterIds}
             />
           ) : null}
