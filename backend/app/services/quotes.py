@@ -25,11 +25,29 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import NamedTuple, Sequence
 
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Account, FxRate, HoldingTag, Instrument, PriceQuote, Tag, Transaction
+
+
+class QuoteRow(NamedTuple):
+    """Lightweight price-quote row for the day-replay services.
+
+    networth / contributions / reconciliation load thousands of quotes per call
+    but only read date / price / currency / instrument_id and never mutate or
+    persist them. Their `_load_quotes` select these columns as plain rows
+    instead of hydrating full `PriceQuote` ORM entities — the measured dominant
+    cost of those endpoints. Attribute-compatible with `PriceQuote` for the
+    fields these services touch.
+    """
+
+    instrument_id: str
+    date: date
+    price: Decimal
+    currency: str
 
 
 class MissingFxRateError(LookupError):
@@ -61,12 +79,12 @@ def convert(
     raise ValueError(f"unsupported currency conversion: {from_currency}->{to_currency}")
 
 
-def quote_on_or_before(quotes: list[PriceQuote], as_of: date) -> PriceQuote | None:
+def quote_on_or_before(quotes: Sequence[QuoteRow], as_of: date) -> QuoteRow | None:
     """Return the last quote whose date <= as_of, or None.
 
     Assumes `quotes` is pre-sorted date-ascending by the caller (the per-module
     `_load_quotes` queries do this). The tail element is therefore the most
-    recent eligible quote.
+    recent eligible quote. Duck-typed: reads only `.date`.
     """
     eligible = [quote for quote in quotes if quote.date <= as_of]
     if not eligible:

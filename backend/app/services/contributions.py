@@ -22,7 +22,7 @@ from app.schemas.contributions import ContributionBucket, SeriesPoint
 from app.services.cost_basis import _cost_basis_at, _load_allocations, _open_lots_at
 from app.services.date_cursor import ForwardCursor
 from app.services.market_data import load_market_data
-from app.services.quotes import MissingFxRateError, convert
+from app.services.quotes import MissingFxRateError, QuoteRow, convert
 from app.services.quotes import convert_currency as _convert_currency
 
 # Re-exported here so existing imports (`from app.services.contributions import
@@ -279,7 +279,7 @@ async def _load_transactions(
 
 async def _load_quotes(
     session: AsyncSession, end: date
-) -> dict[str, list[PriceQuote]]:
+) -> dict[str, list[QuoteRow]]:
     # NOTE: intentional drift from networth._load_quotes. networth's ORDER BY
     # adds a manual-source precedence tiebreak —
     #   case((PriceQuote.source == "manual", 1), else_=0).asc()
@@ -290,15 +290,25 @@ async def _load_quotes(
     # tiebreak here could change which same-date quote contributions selects and
     # therefore its emitted values. Kept distinct to preserve behavior; only the
     # shared scan helper (quote_on_or_before) is unified.
+    #
+    # Selects columns as plain QuoteRow rows, not full PriceQuote ORM entities
+    # (the dominant per-call cost); value-identical for every field read here.
     stmt = (
-        select(PriceQuote)
+        select(
+            PriceQuote.instrument_id,
+            PriceQuote.date,
+            PriceQuote.price,
+            PriceQuote.currency,
+        )
         .where(PriceQuote.date <= end)
         .order_by(PriceQuote.instrument_id.asc(), PriceQuote.date.asc(), PriceQuote.fetched_at.asc())
     )
     result = await session.execute(stmt)
-    quotes_by_instrument: dict[str, list[PriceQuote]] = defaultdict(list)
-    for quote in result.scalars():
-        quotes_by_instrument[quote.instrument_id].append(quote)
+    quotes_by_instrument: dict[str, list[QuoteRow]] = defaultdict(list)
+    for instrument_id, quote_date, price, currency in result.all():
+        quotes_by_instrument[instrument_id].append(
+            QuoteRow(instrument_id, quote_date, price, currency)
+        )
     return quotes_by_instrument
 
 

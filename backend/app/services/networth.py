@@ -14,7 +14,7 @@ from app.core.constants import VALUE_SCALE, ZERO
 from app.models import FxRate, HoldingTag, Instrument, PriceQuote, Tag, Transaction
 from app.services.cost_basis import _load_allocations, _open_lots_at
 from app.services.date_cursor import ForwardCursor
-from app.services.quotes import MissingFxRateError, convert
+from app.services.quotes import MissingFxRateError, QuoteRow, convert
 
 # networth's value/cost-basis quantization scale (1e-8). Aliased from the
 # centralized VALUE_SCALE; the historical local name UNIT_SCALE is retained.
@@ -551,9 +551,19 @@ async def _load_instruments(session: AsyncSession) -> dict[str, Instrument]:
 
 async def _load_quotes(
     session: AsyncSession, end: date
-) -> dict[str, list[PriceQuote]]:
+) -> dict[str, list[QuoteRow]]:
+    # Select only the columns the day-replay reads, as plain rows, rather than
+    # hydrating full PriceQuote ORM entities (the dominant per-call cost — this
+    # loads thousands of quotes). The custom column types still convert price to
+    # Decimal and date to a python date, so QuoteRow is value-identical to the
+    # former ORM objects for every field consumed here.
     stmt = (
-        select(PriceQuote)
+        select(
+            PriceQuote.instrument_id,
+            PriceQuote.date,
+            PriceQuote.price,
+            PriceQuote.currency,
+        )
         .where(PriceQuote.date <= end)
         .order_by(
             PriceQuote.instrument_id.asc(),
@@ -563,15 +573,17 @@ async def _load_quotes(
         )
     )
     result = await session.execute(stmt)
-    quotes_by_instrument: dict[str, list[PriceQuote]] = defaultdict(list)
-    for quote in result.scalars():
-        quotes_by_instrument[quote.instrument_id].append(quote)
+    quotes_by_instrument: dict[str, list[QuoteRow]] = defaultdict(list)
+    for instrument_id, quote_date, price, currency in result.all():
+        quotes_by_instrument[instrument_id].append(
+            QuoteRow(instrument_id, quote_date, price, currency)
+        )
     return quotes_by_instrument
 
 
 async def _load_fx(session: AsyncSession, end: date) -> dict[date, Decimal]:
     stmt = (
-        select(FxRate)
+        select(FxRate.date, FxRate.rate)
         .where(
             FxRate.base_currency == "EUR",
             FxRate.quote_currency == "USD",
@@ -580,7 +592,9 @@ async def _load_fx(session: AsyncSession, end: date) -> dict[date, Decimal]:
         .order_by(FxRate.date.asc(), FxRate.fetched_at.asc())
     )
     result = await session.execute(stmt)
-    return {rate.date: rate.rate for rate in result.scalars()}
+    # date-ascending then fetched_at-ascending => latest fetched_at for a given
+    # date wins the dict slot (same last-write-wins as the former scalars loop).
+    return {row_date: rate for row_date, rate in result.all()}
 
 
 def _convert_amount(
