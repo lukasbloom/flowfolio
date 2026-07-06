@@ -4,11 +4,14 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir pip==24.* && \
-    pip install --no-cache-dir "fastapi==0.136.*" "uvicorn[standard]==0.29.*" \
-    "sqlalchemy[asyncio]==2.0.*" "aiosqlite==0.20.*" "alembic==1.13.*" \
-    "pydantic-settings==2.*" "passlib[bcrypt]==1.7.*" "bcrypt<5" "python-jose[cryptography]==3.*" \
-    "httpx==0.27.*" "apscheduler==3.11.*" "selectolax==0.3.*"
+# Dependencies come from the uv.lock lockfile (shared source of truth with
+# pyproject.toml), exported to a pinned + hashed requirements file and installed
+# into the system environment. Copying only the lock inputs before the app keeps
+# this layer cached across app-code edits.
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt && \
+    uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt
 
 COPY . .
 

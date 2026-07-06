@@ -15,14 +15,20 @@ RUN npm install
 COPY frontend/ .
 RUN npm run build
 
-# ---- python deps (mirrors backend/Dockerfile; the stale upper bcrypt pin is
-#      dropped per RESEARCH — pyproject floors at bcrypt>=4, passlib still listed) ----
+# ---- python deps: installed from the backend/uv.lock lockfile so the image
+#      dependency set can never drift from what the test suite runs against
+#      (a hardcoded pip list silently shipped an image missing pyotp/segno once).
+#      uv exports the locked RUNTIME deps — no dev group, project itself excluded
+#      since the app is COPYed separately below — to a fully pinned + hashed
+#      requirements file, installed into the system site-packages the runtime
+#      stage copies. Copying only the lock inputs keeps this layer cached across
+#      app-code edits. ----
 FROM python:3.12-slim AS api-build
-RUN pip install --no-cache-dir pip==24.* && \
-    pip install --no-cache-dir "fastapi==0.136.*" "uvicorn[standard]==0.29.*" \
-    "sqlalchemy[asyncio]==2.0.*" "aiosqlite==0.20.*" "alembic==1.13.*" \
-    "pydantic-settings==2.*" "passlib[bcrypt]==1.7.*" "bcrypt>=4" "python-jose[cryptography]==3.*" \
-    "httpx==0.27.*" "apscheduler==3.11.*" "selectolax==0.3.*"
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+WORKDIR /tmp/dep
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o requirements.txt && \
+    uv pip install --system --no-cache --require-hashes -r requirements.txt
 
 # ---- final runtime ----
 FROM python:3.12-slim AS runtime
