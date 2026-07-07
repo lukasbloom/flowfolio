@@ -4,35 +4,32 @@
 #   docker compose up -d
 #
 # The former 4-service base now lives in compose.multi.yml (used by the dev/test
-# overlays). The `updater` sidecar lives ONLY here. It is
-# the SAME image run with a different entrypoint, and the ONLY component that
-# holds the Docker socket (least privilege).
+# overlays). To upgrade: docker compose pull && docker compose up -d.
 services:
   flowfolio:
     build: .
-    # Published by the release workflow. Required for the updater's
-    # `docker compose pull flowfolio`. `build: .` is kept so a local
-    # build still works for development.
+    # Published by the release workflow. `build: .` is kept so a local build
+    # still works for development.
     image: ghcr.io/lukasbloom/flowfolio:latest
     restart: unless-stopped
     ports:
       # All three are published by default so a single `docker compose up -d`
       # works in BOTH modes with no edits:
-      #   DOMAIN set   -> Caddy serves ACME HTTPS on 443 (80 redirects); 8080 is idle.
-      #   DOMAIN unset -> Caddy serves plain HTTP on 8080 (http://localhost:8080);
+      #   DOMAIN set   -> Caddy serves ACME HTTPS on 443 (80 redirects). 8080 is idle.
+      #   DOMAIN unset -> Caddy serves plain HTTP on 8080 (http://localhost:8080).
       #                   80/443 are idle. Open http://localhost:8080.
       - "80:80"
       - "443:443"
       - "8080:8080"
     environment:
-      # Bare hostname => Caddy runs ACME auto-HTTPS; unset => http://localhost:8080.
+      # Bare hostname => Caddy runs ACME auto-HTTPS. Unset => http://localhost:8080.
       - DOMAIN=${DOMAIN:-}
       # Defaults to production (Swagger off + Secure cookie + boot guards). Empty
       # passes through and still resolves to production in the app. Set
-      # APP_ENV=development only for a plain-HTTP local trial — see .env.example.
+      # APP_ENV=development only for a plain-HTTP local trial. See .env.example.
       - APP_ENV=${APP_ENV:-}
       - APP_PASSWORD=${APP_PASSWORD:-}            # optional pre-seed
-      - SECRET_KEY=${SECRET_KEY:-}                # optional; auto-gen if unset
+      - SECRET_KEY=${SECRET_KEY:-}                # optional, auto-gen if unset
       - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
       - BACKUP_DEST=${BACKUP_DEST:-}              # off-host opt-in
       - BACKUP_RETAIN_DAYS=${BACKUP_RETAIN_DAYS:-30}
@@ -49,39 +46,7 @@ services:
       - db_data:/data
       # Local backup artifacts, kept separate from the live DB volume.
       - backups:/backups
-      # Self-update channel: the app writes /update/request.json here and
-      # reads /update/status.json. The app NEVER mounts the Docker socket.
-      - update_channel:/update
-
-  # Least-privilege self-update agent. Same image as
-  # flowfolio, run with a different entrypoint (scripts/updater.sh). It is the
-  # ONLY service that mounts the Docker socket. It pulls + recreates ONLY the
-  # flowfolio app service via the compose-pinned image. `restart: unless-stopped`
-  # so it survives the app recreate and keeps writing status throughout.
-  updater:
-    image: ghcr.io/lukasbloom/flowfolio:latest
-    restart: unless-stopped
-    # Override the image's s6 `/init` entrypoint — this container runs ONLY the
-    # updater script, not the full app stack.
-    entrypoint: ["/bin/sh", "/app/scripts/updater.sh"]
-    working_dir: /project
-    environment:
-      # CRITICAL: keeps `docker compose up -d flowfolio` recreating the SAME
-      # running container/stack rather than spawning a new project.
-      - COMPOSE_PROJECT_NAME=flowfolio
-      - UPDATE_CHANNEL_DIR=/update
-    volumes:
-      # The compose file the updater drives, read-only so the agent cannot
-      # rewrite what gets pulled/recreated.
-      - ./compose.yml:/project/compose.yml:ro
-      # The Docker socket — the single point of host-Docker control. ONLY here.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # The shared request/status channel. The updater does NOT mount
-      # db_data or backups — the pre-update snapshot + rollback restore run via
-      # `docker exec` into the app container (least privilege).
-      - update_channel:/update
 
 volumes:
   db_data:
   backups:
-  update_channel:

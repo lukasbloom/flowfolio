@@ -44,11 +44,6 @@
 #   - FLOWFOLIO_SCHEDULER_ENABLED=false               the reset cron MUST run, so the
 #                                                     scheduler stays enabled (unlike the
 #                                                     test overlay, which suppresses it).
-#
-# INHERITED `updater` SIDECAR: compose.yml ships a docker-socket-holding updater. The
-# public demo deployment decides whether to run it. The 403 on
-# POST /api/update/apply means the app never writes /update/request.json, so the updater
-# idles regardless — do NOT rely on this overlay to disable it.
 
 services:
   flowfolio:

@@ -42,13 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Caddy binary from the official pinned image (glibc-compatible).
 COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
 
-# Docker CLI + compose plugin: pinned static binaries from the official
-# images (glibc-compatible). Only the `updater` sidecar (scripts/updater.sh)
-# ever invokes `docker`/`docker compose`; the app process never does. The
-# compose plugin must live under cli-plugins/ to be discovered as `docker compose`.
-COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker/compose-bin:v2.32.4 /docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
-
 # Node runtime from the web-build stage (node:22-slim is Debian/glibc, so the
 # binary runs on this python:3.12-slim base). The Next standalone server.js
 # needs only the node binary at runtime, no node_modules tree.

@@ -4,10 +4,9 @@
 # Example: ./restore_local.sh /backups/preupdate/flowfolio-preupdate-….db.age /data/flowfolio.db
 #
 # Unlike restore.sh (which pulls from an off-host rclone remote), this decrypts a
-# snapshot that already exists on the local filesystem. The self-update flow uses
-# it via `docker exec` into the app container during a rollback to restore
-# the pre-update snapshot (forward-only recovery). The updater itself
-# never mounts /data or /backups, so the restore runs inside the app container.
+# snapshot that already exists on the local filesystem. It is a manual
+# local-recovery helper, run via `docker exec` into the app container to
+# restore a known-good snapshot.
 #
 # Required env:
 #   BACKUP_ENCRYPTION_KEY  symmetric age passphrase used during backup
