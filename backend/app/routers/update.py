@@ -22,6 +22,7 @@ from app.services.update_store import (
     get_dismissed_version,
     set_dismissed_version,
 )
+from app.services.update_version import is_newer_release
 
 router = APIRouter(prefix="/api/update", tags=["update"])
 
@@ -49,8 +50,11 @@ async def get_update_status(
     # the update prompt entirely and surface is_dev so the UI can explain why.
     is_dev = current == "dev"
     dismissed = latest is not None and dismissed_version == latest
+    # Only a strictly newer release is actionable. A plain `latest != current`
+    # would flag the older cached release as an update while the running version
+    # leads it (the daily check has not refreshed yet after a release).
     update_available = (
-        latest is not None and latest != current and not dismissed and not is_dev
+        is_newer_release(latest, current) and not dismissed and not is_dev
     )
 
     return UpdateStatusResponse(

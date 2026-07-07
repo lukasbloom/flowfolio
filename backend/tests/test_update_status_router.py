@@ -82,6 +82,20 @@ async def test_no_update_when_current_is_latest(authed):
 
 
 @pytest.mark.asyncio
+async def test_no_update_when_current_is_newer_than_cached(authed):
+    """Regression: right after a release the running version leads the cached
+    latest release until the daily check refreshes. A downgrade must not show as
+    an available update."""
+    client, maker = authed
+    cfg_module.settings.app_version = "v1.3.0"
+    await _seed_release(maker, version="v1.2.5")
+    body = (await client.get("/api/update-status")).json()
+    assert body["current_version"] == "v1.3.0"
+    assert body["latest_version"] == "v1.2.5"
+    assert body["update_available"] is False
+
+
+@pytest.mark.asyncio
 async def test_dev_build_reports_is_dev_and_suppresses_update(authed):
     """A source-mounted dev build (app_version == 'dev') can't self-update, and
     'dev' isn't comparable to a release (dev is usually AHEAD of the latest tag).
