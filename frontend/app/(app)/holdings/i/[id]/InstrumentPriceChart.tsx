@@ -18,7 +18,7 @@ import ReactECharts from "echarts-for-react";
 
 import { apiFetch } from "@/lib/api-client";
 import { formatMoney, formatQuantity, decimalsFor } from "@/lib/format";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 import { ACCENT, BORDER, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
@@ -486,7 +486,7 @@ export function InstrumentPriceChart({
   ]);
 
   if (histLoading) {
-    return <Skeleton className="h-80 w-full rounded-md md:h-[420px]" />;
+    return <ChartSkeleton variant="line" className="h-80 w-full md:h-[420px]" />;
   }
 
   if (histError) {

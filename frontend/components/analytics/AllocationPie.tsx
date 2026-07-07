@@ -14,7 +14,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useCurrency } from "@/lib/currency";
 import { useTagFilter } from "@/lib/tag-filter";
 import { formatMoney, instrumentTypeLabel } from "@/lib/format";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { PIE_PALETTE } from "@/components/charts/palette";
 
@@ -219,7 +219,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
     return (
       <div>
         <h3 className="text-base font-semibold mb-2">{title}</h3>
-        <Skeleton className="h-72 w-full rounded-md md:h-80" />
+        <ChartSkeleton variant="donut" className="h-72 w-full md:h-80" />
       </div>
     );
   }

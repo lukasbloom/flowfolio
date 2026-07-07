@@ -19,7 +19,7 @@ import { apiFetch } from "@/lib/api-client";
 import { useCurrency } from "@/lib/currency";
 import { useTagFilter } from "@/lib/tag-filter";
 import { formatCompactMoney, formatMoney } from "@/lib/format";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { ACCENT, MUTED, BORDER, CONTRIB_BAR_PALETTE } from "@/components/charts/palette";
 import { PeriodToggle } from "@/components/contributions/PeriodToggle";
@@ -201,7 +201,7 @@ export function ContributionBars() {
         <PeriodToggle value={period} onChange={setPeriod} />
       </div>
 
-      {isLoading && <Skeleton className="h-72 md:h-96 w-full rounded-md" />}
+      {isLoading && <ChartSkeleton variant="bar" className="h-72 w-full md:h-96" />}
 
       {isError && (
         <div className="flex h-72 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-background text-center text-sm text-destructive md:h-96">

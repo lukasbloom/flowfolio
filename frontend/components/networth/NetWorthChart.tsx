@@ -21,7 +21,7 @@ import { AlertTriangle } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { useCurrency } from "@/lib/currency";
 import { decimalsFor, formatCompactMoney, formatMoney, formatQuantity } from "@/lib/format";
-import { Skeleton } from "@/components/ui/skeleton";
+import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { NwTimeframe } from "@/components/networth/timeframe";
@@ -530,7 +530,7 @@ export function NetWorthChart({
   }, [data, currency, timeframe, showTransactions, showCostBasis, showYields]);
 
   if (isLoading) {
-    return <Skeleton className="h-80 w-full rounded-md md:h-[420px]" />;
+    return <ChartSkeleton variant="line" className="h-80 w-full md:h-[420px]" />;
   }
 
   if (isError) {
