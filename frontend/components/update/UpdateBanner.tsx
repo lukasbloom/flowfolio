@@ -36,9 +36,10 @@ export function UpdateBanner() {
     staleTime: 30_000,
   });
 
-  // Hide the self-update banner in demo mode. This is UI defense-in-depth
-  // ONLY, the enforcing control is the 403 on POST /api/update/apply,
-  // which blocks a direct API call regardless of the UI. Do not weaken it.
+  // Hide the update banner in demo mode. The hosted demo is not the user's
+  // own container, so there is nothing for them to update. The banner is a
+  // passive, dismissable notice. It only links to Settings and never offers
+  // an in-app apply action.
   if (config?.demo) return null;
 
   // Absent when up to date, and instantly hidden after an optimistic
