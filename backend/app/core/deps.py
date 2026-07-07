@@ -1,6 +1,6 @@
 """Shared FastAPI dependencies for the demo write-lock.
 
-Single home for `forbid_in_demo` so the keys and self-update routers share one
+Single home for `forbid_in_demo` so the auth and keys routers share one
 canonical guard definition and never drift apart.
 """
 from __future__ import annotations

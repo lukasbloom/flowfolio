@@ -94,17 +94,12 @@ class Settings(BaseSettings):
     backup_dest: str | None = None
     backup_retain_days: int = 30
 
-    # Self-update. APP_VERSION is baked at build time via the release
-    # workflow's --build-arg; falls back to "dev" for local/untagged builds.
+    # Reported by GET /api/version and the update-check banner. APP_VERSION is
+    # baked at build time via the release workflow's --build-arg. It falls back
+    # to "dev" for local/untagged builds.
     app_version: str = "dev"
     github_repo: str = "lukasbloom/flowfolio"  # source of truth for the releases check
     # GITHUB_TOKEN moved to the DB key store; resolved via get_api_key("github").
-
-    # The shared named-volume mount where the app drops
-    # request.json and reads the updater's status.json. Matches the
-    # UPDATE_CHANNEL_DIR mount in compose.yml. The app writes a file
-    # here and NEVER touches the Docker socket — the updater sidecar acts on it.
-    update_channel_dir: str = "/update"
 
     @field_validator("app_version")
     @classmethod

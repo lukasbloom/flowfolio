@@ -33,13 +33,6 @@ class UpdateStatusResponse(BaseModel):
     # safety net does not exist — the UI must not promise "your data is never lost".
     backups_configured: bool = False
 
-    # Live updater progress merged from the shared-volume status.json.
-    # Idle when no update is running (in_progress False, the rest None).
-    update_in_progress: bool = False
-    update_state: str | None = None
-    update_message: str | None = None
-    update_log_tail: str | None = None
-
 
 class CheckResponse(BaseModel):
     """POST /api/update/check result: the outcome and the freshly cached latest.
@@ -56,14 +49,3 @@ class DismissBody(BaseModel):
     """Body for PUT /api/update/dismiss, the version being dismissed."""
 
     version: str
-
-
-class ApplyResponse(BaseModel):
-    """POST /api/update/apply returns the run id + the updater's current state.
-
-    request_id is the lock key: a re-click during a non-terminal run returns the
-    SAME id (re-attach) rather than starting a second recreate.
-    """
-
-    request_id: str
-    state: str | None = None
