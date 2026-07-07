@@ -14,7 +14,7 @@ export interface AppConfig {
 
 // useConfig — the shared boot-flags hook. staleTime Infinity because the flags
 // are frozen at boot and never change within a session, so one fetch serves the
-// banner, the self-update hide-logic, and any other demo-gated surface.
+// banner, the update-panel hide-logic, and any other demo-gated surface.
 export function useConfig() {
   return useQuery({
     queryKey: ["config"],

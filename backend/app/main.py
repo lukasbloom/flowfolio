@@ -274,8 +274,8 @@ app.include_router(settings_router.router)
 app.include_router(keys_router)
 app.include_router(tags.tags_router)
 app.include_router(tags.holding_tags_router)
-# Self-update: /api/version (build-stamped) + the /api/update surface
-# later plans extend. Both are AuthMiddleware-gated like the other data routers.
+# Update check: /api/version (build-stamped) + the /api/update surface
+# (status, check, dismiss). Both are AuthMiddleware-gated like the other data routers.
 app.include_router(update.version_router)
 app.include_router(update.router)
 

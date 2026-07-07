@@ -1,4 +1,4 @@
-"""Self-update key/value store over the user_setting table.
+"""Update-check key/value store over the user_setting table.
 
 Mirrors app/services/setup_state.py: these keys carry a different schema than
 the user-facing settings allowlist, so they are upserted DIRECTLY here, never

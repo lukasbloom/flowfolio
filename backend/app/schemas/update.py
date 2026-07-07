@@ -22,10 +22,10 @@ class UpdateStatusResponse(BaseModel):
     last_checked: str | None
     check_failed: bool
 
-    # True on a source-mounted development build (app_version == "dev"). Self-update
-    # is not possible there (no image to pull) and "dev" isn't comparable to a
-    # release, so update_available is forced False and the UI shows a note instead
-    # of an actionable prompt. See routers/update.py.
+    # True on a source-mounted development build (app_version == "dev"). A dev
+    # build has no released image to compare against, and "dev" is not comparable
+    # to a release, so update_available is forced False and the UI shows a note
+    # instead of an actionable prompt. See routers/update.py.
     is_dev: bool = False
 
     # Whether an encrypted backup is configured (BACKUP_ENCRYPTION_KEY set).

@@ -20,8 +20,8 @@
 #   BACKUP_RETAIN_DAYS  days of daily backups to retain locally + remotely (default: 30)
 #   BACKUP_LABEL        when set, the artifact is named with a label segment and
 #                       written under a dedicated subdir ${BACKUP_DIR}/${BACKUP_LABEL}
-#                       so it is physically separated from daily snapshots. Used by
-#                       the self-update flow with BACKUP_LABEL=preupdate.
+#                       so it is physically separated from daily snapshots (e.g. a
+#                       manual BACKUP_LABEL=preupdate snapshot before pulling a new image).
 #   BACKUP_NO_PRUNE     when "1", skip the off-host upload + all retention pruning,
 #                       so the artifact survives untouched (the pre-update snapshot
 #                       must be recoverable to the exact pre-update state).

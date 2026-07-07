@@ -81,7 +81,7 @@ test.describe("public demo mode", () => {
     await page.goto("/login");
     await expect(page).toHaveURL(/\/track/, { timeout: 10_000 });
 
-    // The self-update surface is hidden in demo (UI half).
+    // The Software updates panel is hidden in demo.
     await page.goto("/settings");
     await expect(
       page.getByRole("heading", { name: "Settings" }),

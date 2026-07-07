@@ -1,7 +1,7 @@
 """Boot-flags config API.
 
 GET /api/config returns the unauthenticated boot flags the frontend reads
-before any session exists: the demo flag (banner, login auto-route, self-update
+before any session exists: the demo flag (banner, login auto-route, update-panel
 hide-logic) and the build version. Auth-exempt and DB-free, it reads only the
 settings singleton. It MUST never expose a secret, key, password, or any
 DB-derived sensitive value.
