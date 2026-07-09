@@ -134,3 +134,35 @@
   .pr-safe   { padding-right:  max(env(safe-area-inset-right),  0px); }
   .bottom-safe-offset-tab { bottom: calc(env(safe-area-inset-bottom, 0px) + 4rem); }
 }
+
+/* Skeleton shimmer: a light band that sweeps left->right on a loop, shared by
+ * the box skeletons (components/ui/skeleton) and the chart skeletons
+ * (components/charts/ChartSkeleton). Replaces the old opacity pulse.
+ * Reduced-motion falls back to a static base with no sweep. */
+@layer utilities {
+  .skeleton-shimmer {
+    background-color: oklch(0.93 0 0);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes skeleton-shimmer {
+      0% { background-position: 150% 0; }
+      100% { background-position: -50% 0; }
+    }
+    .skeleton-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        transparent 20%,
+        oklch(0.985 0 0) 50%,
+        transparent 80%
+      );
+      background-size: 200% 100%;
+      background-repeat: no-repeat;
+      animation: skeleton-shimmer 1.5s ease-in-out infinite;
+    }
+  }
+  /* The chart skeletons draw an SMIL-animated highlight band masked to their
+   * ghost shapes; hide it under reduced motion so only the static shapes show. */
+  @media (prefers-reduced-motion: reduce) {
+    .chart-shimmer-band { display: none; }
+  }
+}
