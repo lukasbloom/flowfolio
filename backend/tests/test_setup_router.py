@@ -106,6 +106,39 @@ async def test_pre_seed_noop_when_app_password_none(db_session):
 
 
 @pytest.mark.asyncio
+async def test_pre_seed_rejects_sub_8_char_password_on_unclaimed_db(db_session):
+    """The pre-seed enforces the same 8-char floor as the interactive setup."""
+    with pytest.raises(RuntimeError, match="shorter than 8 characters"):
+        await pre_seed_admin_password_from_env(db_session, "short7x")
+    await db_session.rollback()
+    assert await is_setup_complete(db_session) is False
+
+
+@pytest.mark.asyncio
+async def test_pre_seed_accepts_exactly_8_char_password(db_session):
+    """An 8-char password is the floor, not the cutoff, it must succeed."""
+    await pre_seed_admin_password_from_env(db_session, "eightchr")
+    await db_session.commit()
+    assert await is_setup_complete(db_session) is True
+    assert await get_admin_password_hash(db_session) is not None
+
+
+@pytest.mark.asyncio
+async def test_pre_seed_short_password_is_noop_on_already_claimed_db(db_session):
+    """An already-claimed instance returns before the length check, a short
+    env value lingering after a proper in-app password change cannot brick it."""
+    await pre_seed_admin_password_from_env(db_session, "firstclaimpw")
+    await db_session.commit()
+    first_hash = await get_admin_password_hash(db_session)
+
+    # No RuntimeError even though "short" is under the floor: the early
+    # is_setup_complete return short-circuits before the length check.
+    await pre_seed_admin_password_from_env(db_session, "short")
+    await db_session.commit()
+    assert await get_admin_password_hash(db_session) == first_hash
+
+
+@pytest.mark.asyncio
 async def test_check_password_reads_db(db_session):
     await claim_admin_password(db_session, "correctpassword")
     await db_session.commit()

@@ -155,3 +155,20 @@ def test_guard_still_rejects_default_secret_even_when_demo():
         assert_production_safety(
             _guard_settings(secret_key="change-me-in-production", demo_mode=True)
         )
+
+
+def test_guard_rejects_sub_8_char_app_password_in_production():
+    """A claimed instance with a weak APP_PASSWORD lingering in the env must
+    also be refused, not just the unclaimed pre-seed path."""
+    with pytest.raises(RuntimeError, match="shorter than 8 characters"):
+        assert_production_safety(_guard_settings(app_password="short7x"))
+
+
+def test_guard_allows_sub_8_char_app_password_in_development():
+    """The floor is a production-only guard, dev trials keep working."""
+    assert (
+        assert_production_safety(
+            _guard_settings(app_env="development", app_password="short7x")
+        )
+        is None
+    )

@@ -124,6 +124,21 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
             "A default SECRET_KEY lets anyone forge session tokens."
         )
 
+    # Refuse a sub-8-char APP_PASSWORD in production. The interactive setup and
+    # the pre-seed both enforce this floor; this catches the case where the DB
+    # is already claimed but the operator keeps a weak APP_PASSWORD in the env
+    # expecting it to be authoritative.
+    if (
+        settings.app_env == "production"
+        and settings.app_password is not None
+        and len(settings.app_password) < 8
+    ):
+        raise RuntimeError(
+            "APP_PASSWORD is shorter than 8 characters. The interactive setup "
+            "enforces this minimum; the env pre-seed does too. Set a longer "
+            "APP_PASSWORD or unset it and claim the password via first-run setup."
+        )
+
 
 def _alembic_upgrade_head() -> None:
     # Run Alembic migrations to head on startup. Idempotent.

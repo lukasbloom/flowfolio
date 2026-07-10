@@ -92,13 +92,21 @@ async def pre_seed_admin_password_from_env(
 ) -> None:
     """Pre-seed the admin password from APP_PASSWORD at boot.
 
-    No-op when app_password is falsy or the instance is already claimed — never
+    No-op when app_password is falsy or the instance is already claimed, never
     overwrites a password the user has already set. Caller owns the transaction.
+    Raises RuntimeError on an unclaimed instance when app_password is under the
+    8-char floor the interactive setup enforces (see setup.py's Field(min_length=8)).
     """
     if not app_password:
         return
     if await is_setup_complete(session):
         return
+    if len(app_password) < 8:
+        raise RuntimeError(
+            "APP_PASSWORD is shorter than 8 characters. The interactive setup "
+            "enforces this minimum; the env pre-seed does too. Set a longer "
+            "APP_PASSWORD or unset it and claim the password via first-run setup."
+        )
     # Fresh DB: the atomic gate insert wins, materializing the APP_PASSWORD
     # rows. The bool return is irrelevant here (boot is single-threaded and we
     # already confirmed the instance is unclaimed); never raises on a clean DB.
