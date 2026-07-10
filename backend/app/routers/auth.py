@@ -12,6 +12,7 @@ run before a session cookie exists.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
@@ -42,49 +43,95 @@ from app.services.setup_state import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# Login brute-force throttle (single-user, single-worker — module state is safe;
-# see scheduler.py WEB_CONCURRENCY=1 enforcement). A global counter is correct
-# here: there is exactly one legitimate user, so per-IP tracking only adds
-# X-Forwarded-For parsing complexity and lets an attacker rotate source IPs.
+# Login brute-force throttle, keyed by client IP (single-user, single-worker,
+# so module state is safe, see scheduler.py WEB_CONCURRENCY=1 enforcement). Each
+# source IP gets its own counter so an unauthenticated third party cannot lock
+# the one legitimate owner out by trickling wrong passwords past a shared global
+# counter. Per-IP keying reproduces the old brute-force semantics within each
+# source (see _register_failure) while removing that cross-source denial of
+# service.
 #
-# Defense-in-depth limitation (accepted): this throttle is BEST-EFFORT
-# and NOT restart-durable. The counter and lockout live in module globals, so
-# any process restart (the documented `uvicorn --reload` dev loop, a crash, a
-# redeploy, or a container restart) resets them. The real protection is the
-# bcrypt-hashed password; this lockout only slows online guessing between
-# restarts. A DB-backed counter (a user_setting row) would make it durable and
-# is the natural future hardening, but is deferred to avoid adding a write on
-# every failed login for a single-user box.
+# Defense-in-depth limitation (accepted): this throttle is BEST-EFFORT and NOT
+# restart-durable. The per-IP table lives in module state, so any process
+# restart (the documented `uvicorn --reload` dev loop, a crash, a redeploy, or a
+# container restart) resets it. The real protection is the bcrypt-hashed
+# password; this lockout only slows online guessing between restarts. A DB-backed
+# counter (a user_setting row) would make it durable and is the natural future
+# hardening, but is deferred to avoid adding a write on every failed login for a
+# single-user box.
 _FAILURE_WINDOW_SECONDS = 600   # forget stale failures older than this
 _LOCKOUT_THRESHOLD = 5          # consecutive failures before lockout
 _LOCKOUT_SECONDS = 60           # base cooldown; doubles each subsequent failure
 _MAX_BACKOFF_EXPONENT = 6       # cap doubling at ~64 min
-
-_failed_attempts: int = 0
-_locked_until: float = 0.0
-_last_failure_at: float = 0.0
+_MAX_TRACKED_IPS = 1024         # bound the table; evict the stalest IP past this
 
 
-def _reset_rate_limiter() -> None:
-    """Clear all login-throttle module state. For tests and successful logins."""
-    global _failed_attempts, _locked_until, _last_failure_at
-    _failed_attempts = 0
-    _locked_until = 0.0
-    _last_failure_at = 0.0
+@dataclass
+class _ThrottleState:
+    """Per-IP brute-force counter: failure streak, lockout deadline, last-seen."""
+
+    failed_attempts: int = 0
+    locked_until: float = 0.0
+    last_failure_at: float = 0.0
 
 
-def _register_failure() -> None:
-    """Record a failed login attempt and arm the lockout once the threshold trips."""
-    global _failed_attempts, _locked_until, _last_failure_at
+_throttle_by_ip: dict[str, _ThrottleState] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """Client IP for rate-limit keying. Caddy fronts the app on loopback in
+    every supported deployment and appends the real peer to X-Forwarded-For, so
+    the LAST entry is the address Caddy saw. Only Caddy can reach the API in the
+    shipped topologies, so that last hop is trustworthy. Fall back to the socket
+    peer when the header is absent (direct dev access, tests). A user who chains
+    their own proxy in front collapses all logins to that proxy's IP, degrading
+    to the old global limiter, which is no worse."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _reset_rate_limiter(ip: str | None = None) -> None:
+    """Clear login-throttle state. No ip clears the whole table (tests, global
+    reset). An ip drops just that source's entry (a completed login)."""
+    if ip is None:
+        _throttle_by_ip.clear()
+    else:
+        _throttle_by_ip.pop(ip, None)
+
+
+def _register_failure(ip: str) -> None:
+    """Record a failed login for one source IP and arm its lockout once the
+    threshold trips. Thresholds, window, and backoff match the old global
+    limiter, now scoped per IP."""
     now = time.monotonic()
+    # Opportunistic cleanup: drop entries whose streak has gone stale and whose
+    # lockout has passed, so the table does not grow without bound.
+    for key in [
+        k
+        for k, st in _throttle_by_ip.items()
+        if now - st.last_failure_at > _FAILURE_WINDOW_SECONDS and now >= st.locked_until
+    ]:
+        del _throttle_by_ip[key]
+
+    state = _throttle_by_ip.get(ip)
+    if state is None:
+        # Memory bound: evict the stalest tracked source before adding a new one.
+        if len(_throttle_by_ip) >= _MAX_TRACKED_IPS:
+            oldest = min(_throttle_by_ip, key=lambda k: _throttle_by_ip[k].last_failure_at)
+            del _throttle_by_ip[oldest]
+        state = _ThrottleState()
+        _throttle_by_ip[ip] = state
+
     # Forget a stale failure streak so a slow trickle never accumulates a lockout.
-    if now - _last_failure_at > _FAILURE_WINDOW_SECONDS:
-        _failed_attempts = 0
-    _last_failure_at = now
-    _failed_attempts += 1
-    if _failed_attempts >= _LOCKOUT_THRESHOLD:
-        exponent = min(_failed_attempts - _LOCKOUT_THRESHOLD, _MAX_BACKOFF_EXPONENT)
-        _locked_until = now + _LOCKOUT_SECONDS * (2 ** exponent)
+    if now - state.last_failure_at > _FAILURE_WINDOW_SECONDS:
+        state.failed_attempts = 0
+    state.last_failure_at = now
+    state.failed_attempts += 1
+    if state.failed_attempts >= _LOCKOUT_THRESHOLD:
+        exponent = min(state.failed_attempts - _LOCKOUT_THRESHOLD, _MAX_BACKOFF_EXPONENT)
+        state.locked_until = now + _LOCKOUT_SECONDS * (2 ** exponent)
 
 
 class LoginRequest(BaseModel):
@@ -94,13 +141,16 @@ class LoginRequest(BaseModel):
 @router.post("/login")
 async def login(
     body: LoginRequest,
+    request: Request,
     response: Response,
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Verify password; on success set HTTP-only session cookie."""
+    ip = _client_ip(request)
     now = time.monotonic()
-    if now < _locked_until:
-        retry_after = int(_locked_until - now) + 1
+    state = _throttle_by_ip.get(ip)
+    if state is not None and now < state.locked_until:
+        retry_after = int(state.locked_until - now) + 1
         raise HTTPException(
             status_code=429,
             detail="Too many failed attempts; try again later",
@@ -109,7 +159,7 @@ async def login(
 
     if not await check_password(session, body.password):
         # Do NOT echo the attempted password in any log line.
-        _register_failure()
+        _register_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid password")
 
     if await is_totp_enabled(session):
@@ -123,8 +173,10 @@ async def login(
         # actually completes (below, or in login_2fa on a correct code).
         return {"twofa_required": "true", "pre_auth_token": create_pre_auth_token()}
 
-    # Successful login clears the brute-force counter and any active lockout.
-    _reset_rate_limiter()
+    # Successful login clears this IP's brute-force counter and lockout. Only
+    # the caller's entry is dropped, so an attacker's armed lockout on another
+    # source IP is untouched by the owner logging in.
+    _reset_rate_limiter(ip)
 
     epoch = await get_token_epoch(session)
     token = create_session_token(epoch)
@@ -147,19 +199,22 @@ class TwoFactorLoginRequest(BaseModel):
 @router.post("/login/2fa")
 async def login_2fa(
     body: TwoFactorLoginRequest,
+    request: Request,
     response: Response,
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Second step of two-step login: verify the pre-auth token + TOTP code.
 
-    Shares the same brute-force throttle as /login (module-global
-    `_locked_until`/`_register_failure`/`_reset_rate_limiter`), so a lockout
-    armed by repeated wrong codes here also blocks the password step, and
-    vice versa. This route is listed in AUTH_EXEMPT_PATHS.
+    Shares the same per-IP brute-force throttle as /login (`_throttle_by_ip`
+    via `_register_failure`/`_reset_rate_limiter`), so within one source IP a
+    lockout armed by repeated wrong codes here also blocks the password step,
+    and vice versa. This route is listed in AUTH_EXEMPT_PATHS.
     """
+    ip = _client_ip(request)
     now = time.monotonic()
-    if now < _locked_until:
-        retry_after = int(_locked_until - now) + 1
+    state = _throttle_by_ip.get(ip)
+    if state is not None and now < state.locked_until:
+        retry_after = int(state.locked_until - now) + 1
         raise HTTPException(
             status_code=429,
             detail="Too many failed attempts; try again later",
@@ -172,10 +227,10 @@ async def login_2fa(
         or not secret
         or not totp.verify_code(secret, body.code)
     ):
-        _register_failure()
+        _register_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid code")
 
-    _reset_rate_limiter()
+    _reset_rate_limiter(ip)
     epoch = await get_token_epoch(session)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
