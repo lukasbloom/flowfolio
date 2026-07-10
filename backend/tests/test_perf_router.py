@@ -12,6 +12,7 @@ from app.core import config as cfg_module
 from app.core.database import Base, attach_sqlite_pragmas, get_db
 from app.main import app
 from app.models import Account, FxRate, Instrument, PriceQuote, Transaction
+from app.services.perf import _first_buy_from_preload
 from tests.conftest import seed_admin_password
 
 
@@ -230,3 +231,35 @@ async def test_get_perf_currency_usd_differs_from_eur(authed_client):
     # The fix is the difference: same holding, two currencies, two numbers.
     assert eur_row["avg_cost"] != usd_row["avg_cost"]
     assert eur_row["current_price"] != usd_row["current_price"]
+
+
+def _txn(
+    txn_type: str, trade_date: date, quantity: Decimal
+) -> Transaction:
+    return Transaction(
+        account_id="acct-1",
+        instrument_id="inst-1",
+        txn_type=txn_type,
+        date=trade_date,
+        quantity=quantity,
+        unit_price=Decimal("10"),
+        price_currency="EUR",
+        fx_rate_to_eur=Decimal("1"),
+        cost_basis_eur=Decimal("100"),
+    )
+
+
+def test_first_buy_from_preload_picks_earliest_positive_buy():
+    """Earliest positive buy/adjustment date wins; a later sell and a
+    zero-quantity adjustment are ignored, mirroring quotes.first_buy_date."""
+    buy = _txn("buy", date(2024, 1, 10), Decimal("5"))
+    sell = _txn("sell", date(2024, 2, 1), Decimal("-5"))
+    zero_adjustment = _txn("adjustment", date(2024, 1, 1), Decimal("0"))
+
+    result = _first_buy_from_preload([sell, zero_adjustment, buy])
+
+    assert result == date(2024, 1, 10)
+
+
+def test_first_buy_from_preload_empty_list_returns_none():
+    assert _first_buy_from_preload([]) is None
