@@ -249,16 +249,21 @@ app.state.token_epoch = 0
 
 # IMPORTANT: middleware order matters in Starlette — last added is the
 # outermost wrapper. AuthMiddleware must wrap the routers but sit inside
-# CORSMiddleware so preflight OPTIONS requests are not blocked.
+# CORSMiddleware so preflight OPTIONS requests are not blocked. Ordering only
+# matters when CORS is registered at all, which is dev-only (see below).
 app.add_middleware(AuthMiddleware)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Dev-only CORS: a bare `next dev` on the host (port 3000) hitting the API
+# directly is the only cross-origin consumer. Production is same-origin
+# behind Caddy and must not ship a credentialed CORS grant.
+if settings.app_env != "production":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Auth router (login/logout) is exempted inside AuthMiddleware.
 app.include_router(auth_router)
