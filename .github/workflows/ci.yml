@@ -20,14 +20,10 @@ jobs:
           cache-dependency-glob: "backend/uv.lock"
       - name: Install
         run: uv sync --extra dev
-      - name: Ruff (informational — ~65 pre-existing violations to burn down)
-        run: uv run ruff check app tests
-        continue-on-error: true
       - name: Pytest
         run: uv run python -m pytest -q
-      - name: Mypy (informational — 101 known errors at baseline)
-        run: uv run mypy app
-        continue-on-error: true
+      - name: Lint ratchet (ruff + mypy may not exceed lint-baseline.json)
+        run: uv run python scripts/lint_ratchet.py
 
   frontend:
     runs-on: ubuntu-latest

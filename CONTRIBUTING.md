@@ -99,7 +99,10 @@ cd frontend && npm run test:e2e:screenshots   # marketing-chromium project
 
 Before opening a PR, please make sure:
 
-- Backend is clean under Ruff and mypy (`ruff check`, `mypy` in `backend/`).
+- Backend adds no new Ruff or mypy errors. CI enforces a count ratchet against
+  `backend/lint-baseline.json`. Run `uv run python scripts/lint_ratchet.py` in
+  `backend/` to check locally. If your PR fixes existing errors, lower the
+  baseline numbers in the same PR.
 - Frontend passes ESLint (`npm run lint`) and builds (`npm run build`).
 - The relevant test suites are green.
 - Money math stays on `decimal.Decimal` (backend) and exact representations end
