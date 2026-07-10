@@ -24,7 +24,11 @@ from app.schemas.transaction import (
 )
 from app.services.audit import AUDITED_FIELDS, _stringify, write_audit_event
 from app.services.cost_basis import compute_cost_basis as _compute_cost_basis
-from app.services.fifo import match_lots_for_sell
+from app.services.fifo import (
+    delete_lot_allocs_for_sell,
+    match_lots_for_sell,
+    recompute_fifo_for_pair,
+)
 from app.services.fx import get_or_fetch_fx_rate
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -49,11 +53,35 @@ def _compute_diff_from_snapshots(
     return diff
 
 
-async def _delete_lot_allocs_for_sell(session: AsyncSession, sell_txn_id: str) -> None:
-    """Delete all lot_alloc rows for a sell/spend transaction (cascade re-open of buy lots)."""
-    await session.execute(
-        sql_delete(LotAlloc).where(LotAlloc.sell_txn_id == sell_txn_id)
-    )
+# Fields whose edit changes FIFO matching: quantity/unit_price/fx feed realized
+# gains, date feeds FIFO ordering. A notes-only or fee-only edit skips recompute.
+_FIFO_RELEVANT_FIELDS = frozenset({"quantity", "unit_price", "fx_rate_to_eur", "date"})
+
+
+async def _release_and_recompute_for_deleted(
+    db: AsyncSession, txn: Transaction
+) -> None:
+    """Release the lot allocations a just-soft-deleted txn is involved in and
+    re-run FIFO for its pair.
+
+    A disposal only releases its own allocs (freeing lots never breaks
+    coverage). A buy/adjustment that later sells consumed releases those allocs
+    and re-matches the pair; if the remaining open lots can no longer cover
+    those sells, recompute_fifo_for_pair raises ValueError (caller maps to 422).
+    """
+    if txn.txn_type in DISPOSAL_TXN_TYPES:
+        await delete_lot_allocs_for_sell(db, txn.id)
+        return
+    if txn.txn_type in ("buy", "adjustment"):
+        consumed = await db.execute(
+            select(LotAlloc.id).where(LotAlloc.buy_txn_id == txn.id).limit(1)
+        )
+        if consumed.scalar_one_or_none() is not None:
+            await db.execute(
+                sql_delete(LotAlloc).where(LotAlloc.buy_txn_id == txn.id)
+            )
+            await db.flush()
+            await recompute_fifo_for_pair(db, txn.account_id, txn.instrument_id)
 
 
 @router.post("", response_model=TransactionResponse, status_code=201)
@@ -267,7 +295,6 @@ async def update_transaction(
     if txn.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    was_sell = txn.txn_type in DISPOSAL_TXN_TYPES
     update_data = body.model_dump(exclude_unset=True)
 
     # Prevent explicitly clearing the price fields on a buy/spend.
@@ -310,17 +337,21 @@ async def update_transaction(
     if diff:
         await write_audit_event(db, txn.id, "edit", diff)
 
-    # If this is (or was) a sell/spend, recompute FIFO
+    # Recompute FIFO when a lot-affecting field changed on a lot-bearing txn:
+    # disposals consume lots, buys/adjustments ARE the lots. The recompute runs
+    # pair-wide (a sell can consume a buy dated after it, so per-row rematching
+    # is order-sensitive) and replaces the old self-only match_lots_for_sell.
     is_sell_now = txn.txn_type in DISPOSAL_TXN_TYPES
-    if was_sell or is_sell_now:
-        await _delete_lot_allocs_for_sell(db, txn.id)
-        await db.flush()
+    affects_lots = is_sell_now or txn.txn_type in ("buy", "adjustment")
+    if affects_lots and (_FIFO_RELEVANT_FIELDS & update_data.keys()):
         if is_sell_now:
-            try:
-                await match_lots_for_sell(db, txn)
-            except ValueError as exc:
-                await db.rollback()
-                raise HTTPException(status_code=422, detail=str(exc))
+            await delete_lot_allocs_for_sell(db, txn.id)
+        await db.flush()
+        try:
+            await recompute_fifo_for_pair(db, txn.account_id, txn.instrument_id)
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc))
 
     await db.commit()
     result = await db.execute(
@@ -356,27 +387,38 @@ async def delete_transaction(txn_id: str, db: AsyncSession = Depends(get_db)):
         db, txn.id, "delete", {"deleted_at": {"old": None, "new": "now"}}
     )
 
-    # If this was a sell or spend, release its lot_alloc rows
-    if txn.txn_type in DISPOSAL_TXN_TYPES:
-        await _delete_lot_allocs_for_sell(db, txn.id)
+    # Release lot allocations and recompute FIFO for the deleted row (and the
+    # paired row on a linked-trade cascade). Deleting a consumed buy re-matches
+    # the pair; if the remaining lots cannot cover its sells the whole delete is
+    # rejected with 422 and rolled back. Product decision: you cannot orphan
+    # a dependent sell, absorb it with other lots or delete the sell first.
+    try:
+        await _release_and_recompute_for_deleted(db, txn)
 
-    # Linked-pair cascade, soft-delete the paired transaction
-    if pair_id is not None:
-        pair_result = await db.execute(
-            select(Transaction).where(
-                Transaction.trade_pair_id == pair_id,
-                Transaction.id != txn.id,
-                Transaction.deleted_at.is_(None),
+        # Linked-pair cascade, soft-delete the paired transaction
+        if pair_id is not None:
+            pair_result = await db.execute(
+                select(Transaction).where(
+                    Transaction.trade_pair_id == pair_id,
+                    Transaction.id != txn.id,
+                    Transaction.deleted_at.is_(None),
+                )
             )
+            paired = pair_result.scalar_one_or_none()
+            if paired is not None:
+                paired.deleted_at = clock.now()
+                await write_audit_event(
+                    db,
+                    paired.id,
+                    "delete",
+                    {"deleted_at": {"old": None, "new": "now"}},
+                )
+                await _release_and_recompute_for_deleted(db, paired)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=f"Cannot delete: remaining lots cannot cover existing sells ({exc})",
         )
-        paired = pair_result.scalar_one_or_none()
-        if paired is not None:
-            paired.deleted_at = clock.now()
-            await write_audit_event(
-                db, paired.id, "delete", {"deleted_at": {"old": None, "new": "now"}}
-            )
-            # Also release lot_alloc rows for the paired txn if it was a sell/spend
-            if paired.txn_type in DISPOSAL_TXN_TYPES:
-                await _delete_lot_allocs_for_sell(db, paired.id)
 
     await db.commit()

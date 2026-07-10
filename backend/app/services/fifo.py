@@ -1,9 +1,12 @@
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import DISPOSAL_TXN_TYPES
 from app.models.lot_alloc import LotAlloc
 from app.models.transaction import Transaction
 
@@ -105,3 +108,51 @@ async def match_lots_for_sell(
         )
 
     return allocs
+
+
+async def delete_lot_allocs_for_sell(session: AsyncSession, sell_txn_id: str) -> None:
+    """Delete a sell/spend's LotAlloc rows (re-opens the buy lots it consumed)."""
+    await session.execute(
+        sql_delete(LotAlloc).where(LotAlloc.sell_txn_id == sell_txn_id)
+    )
+
+
+async def recompute_fifo_for_pair(
+    session: AsyncSession,
+    account_id: str,
+    instrument_id: str,
+    after_date: date = date.min,
+) -> None:
+    """Re-run FIFO for every sell/spend on this (account, instrument) pair
+    whose date >= after_date, in FIFO order. Pass date.min (the default) to
+    re-match the whole pair: a sell can consume a buy dated after it, so
+    per-sell rematching is order-sensitive and must run pair-wide.
+
+    Deletes the lot allocs of ALL selected disposals first (one flush), then
+    rematches each in FIFO order. Rematching one sell at a time would let a
+    not-yet-rematched later sell's stale allocations still count as
+    consumption, giving non-FIFO lot attribution and wrong per-sell realized
+    gains. Raises ValueError if a sell can no longer be covered by open lots.
+    """
+    stmt = (
+        select(Transaction)
+        .where(
+            Transaction.account_id == account_id,
+            Transaction.instrument_id == instrument_id,
+            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES),
+            Transaction.date >= after_date,
+            Transaction.deleted_at.is_(None),
+        )
+        .order_by(Transaction.date.asc(), Transaction.created_at.asc())
+    )
+    result = await session.execute(stmt)
+    disposals = list(result.scalars().all())
+    # Clear every disposal's allocs up front so availability at each rematch
+    # step reflects only what earlier sells (already rematched in this pass)
+    # have consumed, never a later sell's stale rows.
+    for sell_txn in disposals:
+        await delete_lot_allocs_for_sell(session, sell_txn.id)
+    await session.flush()
+    for sell_txn in disposals:
+        await match_lots_for_sell(session, sell_txn)
+        await session.flush()
