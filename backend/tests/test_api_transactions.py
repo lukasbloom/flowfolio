@@ -763,6 +763,79 @@ async def test_put_currency_flip_on_buy_refreshes_stale_realized_gain(
     ), "stale realized_gain_eur must be recomputed after the buy-side currency flip"
 
 
+# ---------------------------------------------------------------------------
+# A PUT that re-sends the CURRENT price_currency unchanged must be a true
+# no-op: presence of the key alone used to be enough to trigger both the
+# re-lock (overwriting a deliberately locked broker rate) and the FIFO
+# recompute gate (churning lot allocs for nothing).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_same_currency_resend_is_noop(client_and_session, monkeypatch):
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    _patch_frankfurter(monkeypatch, _frankfurter_ok("1.2000", "2025-06-20"))
+    buy_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-06-20",
+            "quantity": "10",
+            "unit_price": "100",
+            "price_currency": "USD",
+        },
+    )
+    assert buy_resp.status_code == 201
+    buy_id = buy_resp.json()["id"]
+    assert Decimal(buy_resp.json()["fx_rate_to_eur"]) == Decimal("1.2000")
+
+    # Sell 10 via session (bare sells rejected at API level) to create a
+    # LotAlloc row we can check for churn.
+    from app.models.transaction import Transaction as Txn
+    from app.services.fifo import match_lots_for_sell
+
+    async with maker() as session:
+        sell_txn = Txn(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="sell",
+            date=date(2025, 6, 21),
+            quantity=Decimal("-10"),
+            unit_price=Decimal("150"),
+            price_currency="USD",
+            fx_rate_to_eur=Decimal("1.2000"),
+        )
+        session.add(sell_txn)
+        await session.flush()
+        await match_lots_for_sell(session, sell_txn)
+        await session.commit()
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        allocs_before = result.scalars().all()
+    assert len(allocs_before) == 1
+    alloc_id_before = allocs_before[0].id
+    gain_before = allocs_before[0].realized_gain_eur
+
+    # Re-send the SAME currency, unchanged, without fx_rate_to_eur. Must not
+    # call Frankfurter and must not touch the locked rate or churn the alloc.
+    _patch_frankfurter(monkeypatch, _frankfurter_must_not_be_called())
+    upd = await client.put(f"/api/transactions/{buy_id}", json={"price_currency": "USD"})
+    assert upd.status_code == 200, upd.text
+    assert Decimal(upd.json()["fx_rate_to_eur"]) == Decimal("1.2000")
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        allocs_after = result.scalars().all()
+    assert len(allocs_after) == 1
+    assert allocs_after[0].id == alloc_id_before, "no-op currency re-send churned lot allocs"
+    assert allocs_after[0].realized_gain_eur == gain_before
+
+
 def test_transaction_update_date_field_accepts_iso_string():
     """Regression: TransactionUpdate.date must accept ISO date strings.
 

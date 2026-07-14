@@ -56,9 +56,11 @@ def _compute_diff_from_snapshots(
 
 # Fields whose edit changes FIFO matching or lot economics: quantity/unit_price/fx
 # feed realized gains, date feeds FIFO ordering, and price_currency triggers the
-# FX re-lock in update_transaction, which mutates fx_rate_to_eur even when the
-# client didn't send that key explicitly. A notes-only or fee-only edit skips
-# recompute.
+# FX re-lock in update_transaction, which mutates fx_rate_to_eur, when the edit
+# actually changes its value. update_transaction only counts price_currency here
+# when the value differs from the pre-update one, since a no-op re-send doesn't
+# touch fx_rate_to_eur and so has nothing to recompute. A notes-only or fee-only
+# edit skips recompute.
 _FIFO_RELEVANT_FIELDS = frozenset(
     {"quantity", "unit_price", "fx_rate_to_eur", "date", "price_currency"}
 )
@@ -379,11 +381,18 @@ async def update_transaction(
         else:
             setattr(txn, field, value)
 
-    # FX re-lock: mirror create_transaction's auto-lock when a PUT changes
-    # price_currency. Editing an existing EUR row (fx_rate_to_eur=1) to USD
-    # without supplying a rate would otherwise leave the locked rate at 1,
-    # silently turning e.g. a $100 price into a €100 cost basis.
-    if "price_currency" in update_data:
+    # FX re-lock: mirror create_transaction's auto-lock when a PUT genuinely
+    # CHANGES price_currency. Editing an existing EUR row (fx_rate_to_eur=1) to
+    # USD without supplying a rate would otherwise leave the locked rate at 1,
+    # silently turning e.g. a $100 price into a €100 cost basis. Gated on the
+    # value actually changing, not just the key being present, so a client
+    # re-sending the same currency unchanged leaves the locked-at-transaction-time
+    # rate alone and never calls Frankfurter.
+    currency_changed = (
+        "price_currency" in update_data
+        and update_data["price_currency"] != before_snapshot["price_currency"]
+    )
+    if currency_changed:
         if txn.price_currency == "EUR" and "fx_rate_to_eur" not in update_data:
             # Identity rate, never call Frankfurter for EUR<->EUR
             txn.fx_rate_to_eur = Decimal("1")
@@ -425,7 +434,13 @@ async def update_transaction(
     # is order-sensitive) and replaces the old self-only match_lots_for_sell.
     is_sell_now = txn.txn_type in DISPOSAL_TXN_TYPES
     affects_lots = is_sell_now or txn.txn_type in ("buy", "adjustment")
-    if affects_lots and (_FIFO_RELEVANT_FIELDS & update_data.keys()):
+    # price_currency only feeds FIFO here when its value actually changed (see
+    # currency_changed above): a no-op re-send mutates no lot economics and
+    # would otherwise trigger a pointless full-pair recompute.
+    fifo_relevant_keys = (
+        update_data.keys() if currency_changed else update_data.keys() - {"price_currency"}
+    )
+    if affects_lots and (_FIFO_RELEVANT_FIELDS & fifo_relevant_keys):
         await db.flush()
         # A downward adjustment edited into a positive top-up flips from a lot
         # CONSUMER to a lot SOURCE. recompute_fifo_for_pair only clears and
