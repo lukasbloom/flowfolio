@@ -16,14 +16,20 @@ async def match_lots_for_sell(
     sell_txn: Transaction,
 ) -> list[LotAlloc]:
     """
-    FIFO lot matching executed at sell-write time.
+    FIFO lot matching for a disposal-like txn (sell, spend, or a DOWNWARD
+    adjustment), executed at write time.
 
     Must be called INSIDE an open DB transaction (caller is responsible for commit).
-    Raises ValueError if sell quantity exceeds available open lots.
+    A negative adjustment consumes open lots like a sell, but it is a correction
+    and not a taxable disposal, so its allocs carry realized_gain_eur=None.
+    Raises ValueError if the disposal quantity exceeds available open lots.
 
     Returns the list of LotAlloc rows that were created and added to the session.
     """
-    sell_qty = abs(sell_txn.quantity)  # sell quantity is stored negative; work with positive
+    # sell/spend and downward adjustments are all stored negative. abs() gives
+    # the positive amount to consume.
+    sell_qty = abs(sell_txn.quantity)
+    is_adjustment = sell_txn.txn_type == "adjustment"
 
     # Fetch all buy transactions for this (account, instrument) pair, ordered FIFO (date ASC).
     # quantity is TEXT-backed (DecimalText) — the qty>0 sign filter moves to Python
@@ -74,9 +80,12 @@ async def match_lots_for_sell(
 
         # Compute realized gain in EUR
         # (sell_unit_price / sell_fx) - (buy_unit_price / buy_fx)) * matched_qty
+        # A downward adjustment is a correction, not a taxable disposal, so it
+        # never contributes a realized gain (realized_gain_eur=None).
         realized_gain_eur: Decimal | None = None
         if (
-            sell_txn.unit_price is not None
+            not is_adjustment
+            and sell_txn.unit_price is not None
             and sell_txn.fx_rate_to_eur is not None
             and buy.unit_price is not None
             and buy.fx_rate_to_eur is not None
@@ -123,30 +132,40 @@ async def recompute_fifo_for_pair(
     instrument_id: str,
     after_date: date = date.min,
 ) -> None:
-    """Re-run FIFO for every sell/spend on this (account, instrument) pair
-    whose date >= after_date, in FIFO order. Pass date.min (the default) to
-    re-match the whole pair: a sell can consume a buy dated after it, so
-    per-sell rematching is order-sensitive and must run pair-wide.
+    """Re-run FIFO for every disposal on this (account, instrument) pair whose
+    date >= after_date, in FIFO order. A disposal here is a sell, a spend, or a
+    DOWNWARD (negative) adjustment. A negative reconciliation trim consumes open
+    lots exactly like a sell. Pass date.min (the default) to re-match the whole
+    pair: a disposal can consume a buy dated after it, so per-disposal rematching
+    is order-sensitive and must run pair-wide.
 
     Deletes the lot allocs of ALL selected disposals first (one flush), then
-    rematches each in FIFO order. Rematching one sell at a time would let a
-    not-yet-rematched later sell's stale allocations still count as
-    consumption, giving non-FIFO lot attribution and wrong per-sell realized
-    gains. Raises ValueError if a sell can no longer be covered by open lots.
+    rematches each in FIFO order. Rematching one at a time would let a
+    not-yet-rematched later disposal's stale allocations still count as
+    consumption, giving non-FIFO lot attribution and wrong per-disposal realized
+    gains. Raises ValueError if a disposal can no longer be covered by open lots.
     """
     stmt = (
         select(Transaction)
         .where(
             Transaction.account_id == account_id,
             Transaction.instrument_id == instrument_id,
-            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES),
+            # sell/spend plus adjustments. The downward-only sign filter for
+            # adjustments moves to Python (quantity is TEXT-backed, so a SQL
+            # comparison would coerce the text against a number). Positive
+            # adjustments are lot sources, not disposals, and are dropped below.
+            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES | {"adjustment"}),
             Transaction.date >= after_date,
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
     )
     result = await session.execute(stmt)
-    disposals = list(result.scalars().all())
+    disposals = [
+        txn
+        for txn in result.scalars().all()
+        if txn.txn_type in DISPOSAL_TXN_TYPES or txn.quantity < Decimal("0")
+    ]
     # Clear every disposal's allocs up front so availability at each rematch
     # step reflects only what earlier sells (already rematched in this pass)
     # have consumed, never a later sell's stale rows.
