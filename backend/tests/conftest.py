@@ -36,6 +36,14 @@ import os
 # reads it. test_app_env_default.py controls APP_ENV per-test via monkeypatch.
 os.environ["APP_ENV"] = "development"
 
+# A 32+ char SECRET_KEY so every JWT the suite signs (login, session-epoch,
+# pre-auth tokens) clears PyJWT's InsecureKeyLengthWarning floor. The bare
+# config default ("change-me-in-production", 24 chars) used to sign every one
+# of those tokens under a short key, one warning per token. Set BEFORE any app
+# import for the same reason as APP_ENV above. test_secret_key_bootstrap.py
+# clears and restores this per-test to exercise the unset/short-key paths.
+os.environ["SECRET_KEY"] = "test-suite-secret-key-32-chars-minimum"
+
 from datetime import date as date_t
 from decimal import Decimal
 from typing import Any

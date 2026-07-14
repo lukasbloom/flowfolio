@@ -138,7 +138,7 @@ def _settings(**overrides):
     base = dict(
         app_env="production",
         fixed_now=None,
-        secret_key="a-strong-random-secret",
+        secret_key="a-strong-random-secret-at-least-32-chars-long",
         app_password="a-strong-password",
         demo_mode=False,
     )
