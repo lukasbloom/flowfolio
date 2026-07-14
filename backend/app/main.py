@@ -124,6 +124,25 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
             "A default SECRET_KEY lets anyone forge session tokens."
         )
 
+    # Refuse a sub-8-char APP_PASSWORD in production. The interactive setup and
+    # the pre-seed both enforce this floor; this catches the case where the DB
+    # is already claimed but the operator keeps a weak APP_PASSWORD in the env
+    # expecting it to be authoritative.
+    # None or empty string means unclaimed, first-run wizard state, and must
+    # pass this guard, mirroring pre_seed_admin_password_from_env's `if not
+    # app_password: return` (compose.yml's `APP_PASSWORD=${APP_PASSWORD:-}`
+    # arrives as an empty string, not None, on an unset host var).
+    if (
+        settings.app_env == "production"
+        and settings.app_password
+        and len(settings.app_password) < 8
+    ):
+        raise RuntimeError(
+            "APP_PASSWORD is shorter than 8 characters. The interactive setup "
+            "enforces this minimum; the env pre-seed does too. Set a longer "
+            "APP_PASSWORD or unset it and claim the password via first-run setup."
+        )
+
 
 def _alembic_upgrade_head() -> None:
     # Run Alembic migrations to head on startup. Idempotent.
@@ -234,16 +253,21 @@ app.state.token_epoch = 0
 
 # IMPORTANT: middleware order matters in Starlette — last added is the
 # outermost wrapper. AuthMiddleware must wrap the routers but sit inside
-# CORSMiddleware so preflight OPTIONS requests are not blocked.
+# CORSMiddleware so preflight OPTIONS requests are not blocked. Ordering only
+# matters when CORS is registered at all, which is dev-only (see below).
 app.add_middleware(AuthMiddleware)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Dev-only CORS: a bare `next dev` on the host (port 3000) hitting the API
+# directly is the only cross-origin consumer. Production is same-origin
+# behind Caddy and must not ship a credentialed CORS grant.
+if settings.app_env != "production":
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Auth router (login/logout) is exempted inside AuthMiddleware.
 app.include_router(auth_router)

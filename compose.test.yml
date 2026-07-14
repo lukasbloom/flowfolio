@@ -11,7 +11,7 @@
 # this overlay publishes it on host 8091.
 #
 # It boots the single `flowfolio` service with:
-#   - APP_PASSWORD=test                              (pre-seed → setup_complete
+#   - APP_PASSWORD=test-password-e2e                 (pre-seed → setup_complete
 #                                                    effectively true → the /setup
 #                                                    wizard is skipped, so global-setup
 #                                                    login is unchanged)
@@ -34,11 +34,12 @@
 #                                                    from compose.yml so prod secrets cannot
 #                                                    leak via env_file inheritance)
 #
-# WARNING: This overlay is for hermetic snapshot tests ONLY. The APP_PASSWORD=test
-# hardcoded below MUST NEVER be copied into compose.yml or a production .env. The
-# startup guard in backend/app/main.py refuses to boot if APP_ENV=production
-# AND FLOWFOLIO_FIXED_NOW is set — that guard is the only thing standing between
-# this overlay and a frozen production clock. Do not loosen the guard.
+# WARNING: This overlay is for hermetic snapshot tests ONLY. The
+# APP_PASSWORD=test-password-e2e hardcoded below MUST NEVER be copied into
+# compose.yml or a production .env. The startup guard in backend/app/main.py
+# refuses to boot if APP_ENV=production AND FLOWFOLIO_FIXED_NOW is set, that
+# guard is the only thing standing between this overlay and a frozen
+# production clock. Do not loosen the guard.
 
 services:
   flowfolio:
@@ -59,7 +60,7 @@ services:
     environment:
       - DATABASE_URL=sqlite+aiosqlite:////data/flowfolio.db
       - SECRET_KEY=test-secret-not-for-production
-      - APP_PASSWORD=test
+      - APP_PASSWORD=test-password-e2e
       - APP_ENV=development
       - FLOWFOLIO_FIXED_NOW=2026-04-30T12:00:00Z
       - FLOWFOLIO_SCHEDULER_ENABLED=false
