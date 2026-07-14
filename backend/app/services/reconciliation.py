@@ -18,21 +18,19 @@ from decimal import Decimal
 from typing import Optional
 
 import httpx
-from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ZERO
 from app.core.enums import DISPOSAL_TXN_TYPES
 from app.models.instrument import Instrument
-from app.models.lot_alloc import LotAlloc
 from app.models.reconciliation import Reconciliation
 from app.models.transaction import Transaction
 from app.schemas.reconciliation import (
     ReconciliationCreate,
     ReconciliationPreviewRow,
 )
-from app.services.fifo import match_lots_for_sell
+from app.services.fifo import recompute_fifo_for_pair
 from app.services.fx import get_or_fetch_fx_rate
 from app.services.networth import _fx_on_or_before, _load_fx, _load_quotes
 from app.services.quotes import MissingFxRateError
@@ -75,44 +73,6 @@ async def _write_adjustment_txn(
     session.add(txn)
     await session.flush()
     return txn
-
-
-async def _delete_lot_allocs_for_sell(
-    session: AsyncSession, sell_txn_id: str
-) -> None:
-    """Delete LotAlloc rows for a sell/spend before recomputing FIFO."""
-    await session.execute(
-        sql_delete(LotAlloc).where(LotAlloc.sell_txn_id == sell_txn_id)
-    )
-
-
-async def _recompute_fifo_for_later_sells(
-    session: AsyncSession,
-    account_id: str,
-    instrument_id: str,
-    after_date: date,
-) -> None:
-    """Re-run FIFO for every sell/spend on this (account, instrument) pair
-    whose date >= after_date. Required after a back-dated NEGATIVE
-    adjustment because the new adjustment competes for lots ahead of
-    existing sells in FIFO order.
-    """
-    stmt = (
-        select(Transaction)
-        .where(
-            Transaction.account_id == account_id,
-            Transaction.instrument_id == instrument_id,
-            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES),
-            Transaction.date >= after_date,
-            Transaction.deleted_at.is_(None),
-        )
-        .order_by(Transaction.date.asc(), Transaction.created_at.asc())
-    )
-    result = await session.execute(stmt)
-    for sell_txn in result.scalars().all():
-        await _delete_lot_allocs_for_sell(session, sell_txn.id)
-        await session.flush()
-        await match_lots_for_sell(session, sell_txn)
 
 
 async def build_preview(
@@ -225,7 +185,7 @@ async def _current_qty_map(
     Used by save_event to derive the adjustment delta against the user's
     current app-side position. The snapshot_date on a Reconciliation event
     is the EFFECTIVE date of the adjustment (it determines FIFO ordering
-    via _recompute_fifo_for_later_sells when negative); it is not an
+    via recompute_fifo_for_pair when negative); it is not an
     as-of-date for the diff. The user types the broker's CURRENT qty into
     the form, and the adjustment must close the gap between current
     app-state and that broker value — not the gap between the
@@ -307,7 +267,7 @@ async def save_event(
                     f"app {app_qty} → actual {snapshot_qty}"
                 ),
             )
-            await _recompute_fifo_for_later_sells(
+            await recompute_fifo_for_pair(
                 session,
                 payload.account_id,
                 decision.instrument_id,
@@ -447,7 +407,7 @@ async def save_event(
             # match_lots_for_sell separately — the recompute matches it as
             # part of the same pass).
             if rtxn.txn_type in DISPOSAL_TXN_TYPES:
-                await _recompute_fifo_for_later_sells(
+                await recompute_fifo_for_pair(
                     session,
                     payload.account_id,
                     rtxn.instrument_id,
