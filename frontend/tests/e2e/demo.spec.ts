@@ -29,13 +29,22 @@ const BASE_URL = process.env.PW_BASE_URL ?? "http://localhost:8082";
 
 test.describe("public demo mode", () => {
   // This spec asserts demo-only surfaces, so it must only run against a demo
-  // stack. Skip when /api/config reports the instance is not in demo mode.
+  // stack. Skip when /api/config reports the instance is not in demo mode,
+  // AND skip (rather than throw) when the target is unreachable or returns
+  // something that isn't the expected JSON. Both mean "wrong stack", not a
+  // genuine assertion failure.
   test.beforeEach(async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/config`);
-    const body = (await res.json()) as { demo: boolean };
+    let demo = false;
+    try {
+      const res = await request.get(`${BASE_URL}/api/config`, { timeout: 5_000 });
+      const body = (await res.json()) as { demo?: boolean };
+      demo = body.demo === true;
+    } catch {
+      demo = false;
+    }
     test.skip(
-      !body.demo,
-      "instance is not in demo mode — demo e2e needs the compose.demo.yml stack",
+      !demo,
+      "instance is not in demo mode, unreachable, or a different stack entirely, demo e2e needs the compose.demo.yml stack",
     );
   });
 

@@ -80,9 +80,13 @@ test.describe("RECP: reconciliation polish", () => {
     ).toBeEnabled();
 
     // Hover the focusable wrapper around the disabled Accept → tooltip opens.
-    // (Disabled buttons swallow pointer events, so the wrapper span carries the
-    // hover; the Tooltip content explains why Accept is blocked.)
-    await acceptButton.hover();
+    // The Button itself carries pointer-events-none, so the browser's hit-test
+    // resolves the hover to the wrapping <span> (the Tooltip's real trigger),
+    // not the button. Hovering the button directly hangs on Playwright's
+    // "receives pointer events" actionability check until timeout. Hover the
+    // wrapper, the actual element a real user's cursor lands on.
+    const acceptWrapper = acceptButton.locator("xpath=..");
+    await acceptWrapper.hover();
     await expect(
       page
         .getByText(
