@@ -221,6 +221,32 @@ async def test_realized_totals_include_lifetime_and_this_year(session):
 
 
 @pytest.mark.asyncio
+async def test_realized_totals_this_year_boundary_uses_local_calendar(session, monkeypatch):
+    """Between local midnight and ~02:00 UTC on Jan 1, clock.today() (UTC) is
+    still Dec 31 while clock.today_local() (Madrid) has already turned over.
+    "This year" must bucket by the local date, not UTC, or it sweeps in a
+    prior-year gain during that window.
+    """
+    account, instrument = await _holding(session, symbol="BOUND")
+    old_buy = await _buy(session, account, instrument, trade_date=date(2024, 1, 1))
+    await _disposal(
+        session, account, instrument, old_buy, gain="40", trade_date=date(2025, 12, 30)
+    )
+    new_buy = await _buy(session, account, instrument, trade_date=date(2024, 1, 1))
+    await _disposal(
+        session, account, instrument, new_buy, gain="15", trade_date=date(2026, 1, 1)
+    )
+
+    monkeypatch.setattr("app.core.clock.today", lambda: date(2025, 12, 31))
+    monkeypatch.setattr("app.core.clock.today_local", lambda: date(2026, 1, 1))
+
+    totals = await get_realized_totals(session)
+
+    assert totals.lifetime == Decimal("55")
+    assert totals.this_year == Decimal("15")
+
+
+@pytest.mark.asyncio
 async def test_realized_totals_respect_tag_filter(session):
     tagged_account, tagged_instrument = await _holding(session, symbol="TAG")
     tagged_buy = await _buy(session, tagged_account, tagged_instrument)

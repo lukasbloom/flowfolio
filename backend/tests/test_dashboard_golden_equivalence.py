@@ -68,10 +68,11 @@ async def golden_session():
 
 @pytest.fixture(autouse=True)
 def pin_clock(monkeypatch):
-    """Pin clock.today/now to the fixture's frozen instant for direct callers."""
+    """Pin clock.today/now/today_local to the fixture's frozen instant for direct callers."""
     from datetime import datetime
 
     monkeypatch.setattr("app.core.clock.today", lambda: FROZEN_TODAY)
+    monkeypatch.setattr("app.core.clock.today_local", lambda: FROZEN_TODAY)
     monkeypatch.setattr(
         "app.core.clock.now", lambda: datetime(2026, 4, 30, 12, 0, 0)
     )
