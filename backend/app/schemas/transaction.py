@@ -127,11 +127,15 @@ class TransactionCreate(DecimalModel):
 
 class TransactionUpdate(DecimalModel):
 
-    # txn_type is intentionally NOT mutable via PUT. Sells
-    # only enter the system as part of an atomic linked trade through
-    # POST /api/trades. Allowing PUT to change a buy into a sell would bypass
-    # the trade_pair_id requirement and trip ck_txn_trade_pair_required at
-    # COMMIT time (a 500 instead of a clean 422).
+    # txn_type is intentionally NOT a field on this schema. Sells only enter
+    # the system as part of an atomic linked trade through POST /api/trades,
+    # and since TransactionUpdate omits txn_type, Pydantic silently drops one
+    # if a client sends it in the PUT body. That field omission, not a DB
+    # constraint, is what actually stops PUT from turning a buy into a sell.
+    # ck_txn_trade_pair_required is a real CHECK constraint (raw DDL from the
+    # alembic baseline migration), but it is not declared on the Transaction
+    # model's __table_args__, so it is absent from the fast suite's
+    # Base.metadata.create_all schema and was never the enforcement path here.
     date: Optional[_date_t] = None
     quantity: Optional[DecimalStr] = None
     unit_price: Optional[DecimalStr] = None
