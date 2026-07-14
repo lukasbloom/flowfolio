@@ -164,6 +164,13 @@ def test_guard_rejects_sub_8_char_app_password_in_production():
         assert_production_safety(_guard_settings(app_password="short7x"))
 
 
+def test_guard_allows_empty_app_password_in_production():
+    """compose.yml's APP_PASSWORD=${APP_PASSWORD:-} arrives as an empty
+    string, not None, on an unset host var. That is the unclaimed first-run
+    state and must pass, not brick every default `docker compose up`."""
+    assert assert_production_safety(_guard_settings(app_password="")) is None
+
+
 def test_guard_allows_sub_8_char_app_password_in_development():
     """The floor is a production-only guard, dev trials keep working."""
     assert (

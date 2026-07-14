@@ -128,9 +128,13 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
     # the pre-seed both enforce this floor; this catches the case where the DB
     # is already claimed but the operator keeps a weak APP_PASSWORD in the env
     # expecting it to be authoritative.
+    # None or empty string means unclaimed, first-run wizard state, and must
+    # pass this guard, mirroring pre_seed_admin_password_from_env's `if not
+    # app_password: return` (compose.yml's `APP_PASSWORD=${APP_PASSWORD:-}`
+    # arrives as an empty string, not None, on an unset host var).
     if (
         settings.app_env == "production"
-        and settings.app_password is not None
+        and settings.app_password
         and len(settings.app_password) < 8
     ):
         raise RuntimeError(
