@@ -103,10 +103,13 @@ Before opening a PR, please make sure:
   `backend/lint-baseline.json`. Run `uv run python scripts/lint_ratchet.py` in
   `backend/` to check locally. If your PR fixes existing errors, lower the
   baseline numbers in the same PR.
-- Frontend passes ESLint (`npm run lint`) and builds (`npm run build`).
+- Frontend passes ESLint (`npm run lint`), builds (`npm run build`), and typechecks (`npm run typecheck`).
 - The relevant test suites are green.
 - Money math stays on `decimal.Decimal` (backend) and exact representations end
   to end. Never introduce binary floats into financial calculations.
 - No real secrets, credentials, or personal financial data land in the diff.
+
+For faster local feedback, opt-in pre-commit hooks run the same checks at commit
+time: `uv tool install pre-commit && pre-commit install` in the repo root.
 
 Keep commits focused and the description clear about the "why". That is enough.

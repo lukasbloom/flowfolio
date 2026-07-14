@@ -1,0 +1,24 @@
+# Opt-in local hooks: `pre-commit install` after `pip install pre-commit`
+# (or `uv tool install pre-commit`). CI does not require these. They are a
+# fast local mirror of the checks CI enforces.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10   # keep in the 0.4.x line pinned in backend/pyproject.toml
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint (frontend)
+        entry: bash -c 'cd frontend && npm run lint'
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
+      - id: tsc
+        name: tsc --noEmit (frontend)
+        entry: bash -c 'cd frontend && npm run typecheck'
+        language: system
+        files: ^frontend/.*\.(ts|tsx)$
+        pass_filenames: false
