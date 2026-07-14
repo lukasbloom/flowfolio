@@ -25,7 +25,7 @@ from app.core.database import Base, attach_sqlite_pragmas, get_db
 from app.main import app
 from app.models.lot_alloc import LotAlloc
 from app.models.transaction import Transaction
-from app.services.fifo import match_lots_for_sell
+from app.services.fifo import match_lots_for_sell, recompute_fifo_for_pair
 from tests.conftest import seed_admin_password
 
 
@@ -116,6 +116,48 @@ async def _make_sell(maker, acct_id, inst_id, *, day, qty, price):
         await match_lots_for_sell(session, sell)
         await session.commit()
         return sell.id
+
+
+async def _make_adjustment(maker, acct_id, inst_id, *, day, delta_qty):
+    """Insert a signed adjustment (no price/FX, like the reconciliation engine)
+    then run the pair recompute so a downward trim consumes open lots."""
+    async with maker() as session:
+        adj = Transaction(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="adjustment",
+            date=date(2026, 1, day),
+            quantity=Decimal(delta_qty),
+            unit_price=None,
+            price_currency=None,
+            fx_rate_to_eur=None,
+            cost_basis_eur=None,
+            fee_eur=Decimal("0"),
+            source="adjustment",
+        )
+        session.add(adj)
+        await session.flush()
+        await recompute_fifo_for_pair(session, acct_id, inst_id)
+        await session.commit()
+        return adj.id
+
+
+async def _spend(client, acct_id, inst_id, *, day, qty, price):
+    """POST a spend. The create handler runs FIFO matching and 422s on
+    insufficient open lots."""
+    return await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "spend",
+            "date": f"2026-01-{day:02d}",
+            "quantity": qty,
+            "unit_price": price,
+            "price_currency": "EUR",
+            "fee_eur": "0",
+        },
+    )
 
 
 async def _allocs_for_sell(maker, sell_id):
@@ -410,3 +452,59 @@ async def test_shrink_buy_reattributes_later_sells_fifo(client_and_session):
     assert a2[buy_a["id"]].realized_gain_eur == Decimal("600")  # (30 - 10) * 30
     assert a2[buy_b["id"]].quantity == Decimal("20")
     assert a2[buy_b["id"]].realized_gain_eur == Decimal("200")  # (30 - 20) * 20
+
+
+# ---------------------------------------------------------------------------
+# Negative-adjustment alloc release (plan 008 fix-up). A downward adjustment
+# consumes open lots via sell-side allocs. Delete and sign-flip edits must
+# release those allocs the same way a disposal does, or they orphan and later
+# sells spuriously 422 (delete) / the balance and lots disagree (sign flip).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_delete_negative_adjustment_releases_its_allocs(client_and_session):
+    """buy(100), adjustment(-30) consuming 30 of the buy. Deleting the
+    adjustment releases its sell-side allocs so the buy is fully open again, and
+    a spend of the full restored 100 succeeds instead of a spurious 422."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    await _buy(client, acct_id, inst_id, day=1, qty="100", price="10")
+    adj_id = await _make_adjustment(maker, acct_id, inst_id, day=2, delta_qty="-30")
+
+    # Precondition: the adjustment consumed 30 of the buy lot.
+    assert sum(a.quantity for a in await _allocs_for_sell(maker, adj_id)) == Decimal("30")
+
+    resp = await client.delete(f"/api/transactions/{adj_id}")
+    assert resp.status_code == 204, resp.text
+
+    # The adjustment's allocs are gone, no orphan survives a pair-wide recompute.
+    assert await _allocs_for_sell(maker, adj_id) == []
+    assert await _all_alloc_tuples(maker) == set()
+
+    # Balance and available lots agree again: a spend of the full 100 succeeds.
+    resp = await _spend(client, acct_id, inst_id, day=5, qty="100", price="12")
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
+async def test_flip_adjustment_sign_clears_stale_sell_allocs(client_and_session):
+    """buy(100), adjustment(-30) consuming 30. Editing the adjustment's quantity
+    to +30 flips it from a lot-consuming trim to a lot SOURCE. Its old sell-side
+    allocs must be cleared so the pair balance (130) and available lots (130)
+    agree, a spend of the full 130 then succeeds."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    await _buy(client, acct_id, inst_id, day=1, qty="100", price="10")
+    adj_id = await _make_adjustment(maker, acct_id, inst_id, day=2, delta_qty="-30")
+
+    assert sum(a.quantity for a in await _allocs_for_sell(maker, adj_id)) == Decimal("30")
+
+    resp = await client.put(f"/api/transactions/{adj_id}", json={"quantity": "30"})
+    assert resp.status_code == 200, resp.text
+
+    # The flipped (now +30) adjustment no longer owns any sell-side allocs.
+    assert await _allocs_for_sell(maker, adj_id) == []
+    assert await _all_alloc_tuples(maker) == set()
+
+    # It now acts as a lot source: buy(100) + adjustment(30) = 130 available.
+    resp = await _spend(client, acct_id, inst_id, day=5, qty="130", price="12")
+    assert resp.status_code == 201, resp.text

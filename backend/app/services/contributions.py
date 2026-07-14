@@ -55,7 +55,17 @@ async def get_cost_basis_series(
     # An adjustment is a reconciliation correction, NOT a cash contribution,
     # so contributions must not double-count drift remediation as new money in.
     buy_txns = [txn for txn in txns if txn.txn_type == "buy"]
-    sell_txn_ids = {txn.id for txn in txns if txn.txn_type in {"sell", "spend"}}
+    # Downward adjustments consume open lots (plan 008), so their allocs must
+    # reach _open_lots_at exactly as sell/spend allocs do. Omitting them leaves
+    # the trimmed quantity counted as still-open basis (phantom cost basis). The
+    # downward-only sign filter runs in Python since quantity is TEXT-backed,
+    # mirroring fifo.py's convention.
+    sell_txn_ids = {
+        txn.id
+        for txn in txns
+        if txn.txn_type in {"sell", "spend"}
+        or (txn.txn_type == "adjustment" and txn.quantity < ZERO)
+    }
     allocations = await _load_allocations(session, sell_txn_ids)
     # NOTE: contributions keeps its OWN _load_quotes for the value loop — that
     # ordering carries the documented manual-source tiebreak DRIFT vs. networth

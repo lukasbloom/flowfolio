@@ -63,18 +63,34 @@ _FIFO_RELEVANT_FIELDS = frozenset(
 )
 
 
+async def _owns_sell_side_allocs(db: AsyncSession, txn_id: str) -> bool:
+    """True when this txn consumed open lots and so owns sell-side LotAlloc rows.
+
+    A sell, a spend, and a DOWNWARD (negative) adjustment all consume lots, so
+    their allocs are keyed by sell_txn_id. Selecting by ownership rather than by
+    txn_type or quantity sign keeps release robust when an adjustment's quantity
+    sign flips (its role changes but its stale allocs must still be cleared).
+    """
+    row = await db.execute(
+        select(LotAlloc.id).where(LotAlloc.sell_txn_id == txn_id).limit(1)
+    )
+    return row.scalar_one_or_none() is not None
+
+
 async def _release_and_recompute_for_deleted(
     db: AsyncSession, txn: Transaction
 ) -> None:
     """Release the lot allocations a just-soft-deleted txn is involved in and
     re-run FIFO for its pair.
 
-    A disposal only releases its own allocs (freeing lots never breaks
-    coverage). A buy/adjustment that later sells consumed releases those allocs
-    and re-matches the pair; if the remaining open lots can no longer cover
-    those sells, recompute_fifo_for_pair raises ValueError (caller maps to 422).
+    A txn that consumed lots (a sell, a spend, or a downward adjustment) only
+    releases its own sell-side allocs (freeing lots never breaks coverage). A
+    buy or an upward adjustment that later sells consumed releases those
+    buy-side allocs and re-matches the pair. If the remaining open lots can no
+    longer cover those sells, recompute_fifo_for_pair raises ValueError (caller
+    maps to 422).
     """
-    if txn.txn_type in DISPOSAL_TXN_TYPES:
+    if await _owns_sell_side_allocs(db, txn.id):
         await delete_lot_allocs_for_sell(db, txn.id)
         return
     if txn.txn_type in ("buy", "adjustment"):
@@ -381,7 +397,13 @@ async def update_transaction(
     is_sell_now = txn.txn_type in DISPOSAL_TXN_TYPES
     affects_lots = is_sell_now or txn.txn_type in ("buy", "adjustment")
     if affects_lots and (_FIFO_RELEVANT_FIELDS & update_data.keys()):
-        if is_sell_now:
+        # Release any sell-side allocs this txn already owns before the pair
+        # rematch. A sell/spend always owns them, a downward adjustment does too,
+        # and an edit that flips its quantity to positive must clear those stale
+        # allocs here, since the now-positive row no longer qualifies as a
+        # disposal for recompute_fifo_for_pair to rematch and so would otherwise
+        # leave them orphaned.
+        if await _owns_sell_side_allocs(db, txn.id):
             await delete_lot_allocs_for_sell(db, txn.id)
         await db.flush()
         try:

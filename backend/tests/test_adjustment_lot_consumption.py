@@ -6,7 +6,7 @@ realized_gain_eur=None), so the open-lot decomposition and sell availability
 both reflect the reduced balance, and realized totals never move because of a
 correction.
 """
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,10 +14,13 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core import clock
 from app.core.database import Base
 from app.models import Account, Instrument, LotAlloc, Transaction
+from app.services.contributions import get_cost_basis_series
 from app.services.cost_basis import _load_allocations, _open_lots_at
 from app.services.fifo import match_lots_for_sell, recompute_fifo_for_pair
+from app.services.networth import get_networth_series
 from app.services.realized import get_realized_per_holding
 
 
@@ -237,6 +240,46 @@ async def test_backdated_adjustment_reorders_consumption_in_date_order(session):
     assert by_buy.get(buy1.id) == Decimal("20")
     assert by_buy.get(buy2.id) == Decimal("30")
     assert sum(a.quantity for a in sell_allocs) == Decimal("50")
+
+
+@pytest.mark.asyncio
+async def test_cost_basis_series_reflects_trim(session):
+    """The contributions cost-basis SERIES must feed the negative adjustment's
+    allocs into the open-lot decomposition, exactly as the per-holding path does.
+    Basis is 1000 before the trim date and 700 on/after it, not the phantom 1000
+    that survives when adjustment allocs never reach the series loader."""
+    acct_id, inst_id = await _seed_account_instrument(session)
+    await _make_buy(session, acct_id, inst_id, Decimal("100"), date(2024, 1, 1))
+    await _make_adjustment(session, acct_id, inst_id, Decimal("-30"), date(2024, 2, 1))
+    await recompute_fifo_for_pair(session, acct_id, inst_id)
+
+    cost_basis_points, _ = await get_cost_basis_series(session)
+    by_date = {point.date: point.value for point in cost_basis_points}
+
+    assert by_date[date(2024, 1, 15)] == Decimal("1000")  # pre-trim
+    assert by_date[date(2024, 2, 1)] == Decimal("700")  # on the trim date
+    assert by_date[date(2024, 2, 15)] == Decimal("700")  # post-trim
+
+
+@pytest.mark.asyncio
+async def test_networth_cost_basis_series_reflects_trim(session):
+    """The networth cost-basis series loader must also feed adjustment allocs
+    into the open-lot decomposition. Recent dates plus a 3-month window give a
+    daily series so the pre/post-trim basis is checkable by exact date."""
+    acct_id, inst_id = await _seed_account_instrument(session)
+    today = clock.today()
+    buy_date = today - timedelta(days=40)
+    trim_date = today - timedelta(days=20)
+    await _make_buy(session, acct_id, inst_id, Decimal("100"), buy_date)
+    await _make_adjustment(session, acct_id, inst_id, Decimal("-30"), trim_date)
+    await recompute_fifo_for_pair(session, acct_id, inst_id)
+
+    series = await get_networth_series(session, "3m", "EUR", include_cost_basis=True)
+    by_date = {point.date: point.value for point in series.cost_basis_series}
+
+    assert by_date[today - timedelta(days=30)] == Decimal("1000")  # pre-trim
+    assert by_date[trim_date] == Decimal("700")  # on the trim date
+    assert by_date[today - timedelta(days=10)] == Decimal("700")  # post-trim
 
 
 async def _realized_for_instrument(session: AsyncSession, instrument_id: str) -> Decimal:
