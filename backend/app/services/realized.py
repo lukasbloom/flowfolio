@@ -65,7 +65,10 @@ async def get_realized_per_holding(
             instrument.id: instrument.symbol for instrument in instruments.scalars()
         }
 
-    as_of = clock.today()
+    # This FX as_of is a user-facing calendar boundary, same as its sibling
+    # get_realized_totals, so use today_local() per clock.today_local's
+    # docstring, not the UTC today().
+    as_of = clock.today_local()
     # Hoist the single EUR/USD rate out of the per-instrument
     # loop — every row converts at the same as_of, so one rate lookup replaces N.
     # Resolve the rate ONLY for a non-EUR display currency AND only when there is
