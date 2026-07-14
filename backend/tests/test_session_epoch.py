@@ -12,7 +12,7 @@ def test_legacy_token_without_epoch_claim_validates_against_zero():
     # A token minted the old way (no epoch claim) must survive at epoch 0.
     from datetime import datetime, timedelta, timezone
 
-    from jose import jwt
+    import jwt
 
     from app.core.config import settings
     legacy = jwt.encode(
@@ -27,3 +27,27 @@ def test_pre_auth_token_roundtrip():
     assert auth.validate_pre_auth_token(t) is True
     # A normal session token is NOT a valid pre-auth token (stage claim differs).
     assert auth.validate_pre_auth_token(auth.create_session_token(0)) is False
+
+
+def test_tampered_token_is_rejected():
+    # Flipping one payload byte must break the signature check.
+    t = auth.create_session_token(token_epoch=1)
+    header, payload, signature = t.split(".")
+    tampered_char = "A" if payload[-1] != "A" else "B"
+    tampered_payload = payload[:-1] + tampered_char
+    tampered = f"{header}.{tampered_payload}.{signature}"
+    assert auth.session_token_epoch(tampered) is None
+
+
+def test_expired_token_is_rejected():
+    from datetime import datetime, timedelta, timezone
+
+    import jwt
+
+    from app.core.config import settings
+
+    expired = jwt.encode(
+        {"sub": "user", "exp": datetime.now(timezone.utc) - timedelta(hours=1), "token_epoch": 1},
+        settings.secret_key, algorithm=auth.ALGORITHM,
+    )
+    assert auth.session_token_epoch(expired) is None

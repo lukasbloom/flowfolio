@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -80,7 +80,7 @@ def session_token_epoch(token: str) -> int | None:
     """
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-    except JWTError:
+    except jwt.PyJWTError:
         return None
     if payload.get("sub") != "user":
         return None
@@ -106,6 +106,6 @@ def validate_pre_auth_token(token: str) -> bool:
     """Return True if token is a valid, unexpired pre-auth (2fa stage) token."""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
-    except JWTError:
+    except jwt.PyJWTError:
         return False
     return payload.get("stage") == "2fa"
