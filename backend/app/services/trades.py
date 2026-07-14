@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.transaction import Transaction
 from app.services.cost_basis import compute_cost_basis
 from app.services.fifo import match_lots_for_sell
+from app.services.fifo_convergence import recompute_pair_if_competing_disposal
 from app.services.fx import get_or_fetch_fx_rate
 
 if TYPE_CHECKING:
@@ -95,5 +96,20 @@ async def create_linked_trade(
 
     # FIFO on the sell leg only (received leg is a brand-new lot)
     await match_lots_for_sell(session, sell_txn)
+    await session.flush()
+
+    # Converge BOTH pairs to canonical FIFO (plan 015). POST /api/trades is the
+    # only entry path for sells, so it must recompute like the create path does:
+    # a back-dated sell leg can land on the wrong lot when an existing disposal
+    # holds an earlier one, and a back-dated received leg can precede lots that
+    # existing disposals of that instrument already consumed. Each recompute
+    # runs only when a competing disposal exists and raises ValueError (caller
+    # maps to 422 and rolls back) exactly like the sell-leg match above.
+    await recompute_pair_if_competing_disposal(
+        session, sell_txn.account_id, sell_txn.instrument_id, sell_txn.id
+    )
+    await recompute_pair_if_competing_disposal(
+        session, buy_txn.account_id, buy_txn.instrument_id, buy_txn.id
+    )
 
     return sell_txn, buy_txn

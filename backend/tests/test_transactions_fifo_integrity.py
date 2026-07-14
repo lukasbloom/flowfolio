@@ -176,6 +176,71 @@ async def _all_alloc_tuples(maker):
         }
 
 
+async def _all_alloc_content(maker):
+    """Full alloc content (buy/sell/qty/realized gain), independent of row ids,
+    for byte-identical idempotence assertions across a repeated recompute."""
+    async with maker() as session:
+        res = await session.execute(select(LotAlloc))
+        return {
+            (a.sell_txn_id, a.buy_txn_id, a.quantity, a.realized_gain_eur)
+            for a in res.scalars().all()
+        }
+
+
+async def _new_instrument(client: AsyncClient, symbol: str):
+    """Create a second EUR instrument (the received leg of a linked trade needs
+    an instrument distinct from the sold leg)."""
+    inst = (
+        await client.post(
+            "/api/instruments",
+            json={
+                "symbol": symbol,
+                "name": f"{symbol} token",
+                "instrument_type": "crypto",
+                "base_currency": "EUR",
+                "price_source": "coingecko",
+            },
+        )
+    ).json()
+    return inst["id"]
+
+
+async def _create_trade(
+    client,
+    *,
+    sold_acct,
+    sold_inst,
+    sold_qty,
+    sold_price,
+    recv_acct,
+    recv_inst,
+    recv_qty,
+    recv_price,
+    day,
+):
+    """POST /api/trades, the only entry path for a sell."""
+    return await client.post(
+        "/api/trades",
+        json={
+            "sold": {
+                "account_id": sold_acct,
+                "instrument_id": sold_inst,
+                "quantity": sold_qty,
+                "unit_price": sold_price,
+                "price_currency": "EUR",
+            },
+            "received": {
+                "account_id": recv_acct,
+                "instrument_id": recv_inst,
+                "quantity": recv_qty,
+                "unit_price": recv_price,
+                "price_currency": "EUR",
+            },
+            "date": f"2026-01-{day:02d}",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 1: characterization, behavior that must NOT change
 # ---------------------------------------------------------------------------
@@ -508,3 +573,278 @@ async def test_flip_adjustment_sign_clears_stale_sell_allocs(client_and_session)
     # It now acts as a lot source: buy(100) + adjustment(30) = 130 available.
     resp = await _spend(client, acct_id, inst_id, day=5, qty="130", price="12")
     assert resp.status_code == 201, resp.text
+
+
+# ---------------------------------------------------------------------------
+# Plan 015: every remaining mutation path converges to canonical FIFO. Delete
+# of a disposal, and POST of a back-dated buy or back-dated disposal, used to
+# leave later disposals on stale attribution. Pair totals stayed conserved, so
+# nothing errored. These pin the exact per-disposal lot + realized_gain_eur.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_delete_disposal_reattributes_later_sells_fifo(client_and_session):
+    """Repro 1: A(100)@10 day 1, B(100)@20 day 3; S1(100)@30 day 4 (->A),
+    S2(100)@30 day 5 (->B). Deleting S1 frees A, so canonical FIFO must move S2
+    onto A (gain 2000). The delete path used to release only S1's own allocs and
+    leave S2 on B (gain 1000)."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="100", price="10")
+    buy_b = await _buy(client, acct_id, inst_id, day=3, qty="100", price="20")
+    s1 = await _make_sell(maker, acct_id, inst_id, day=4, qty="100", price="30")
+    s2 = await _make_sell(maker, acct_id, inst_id, day=5, qty="100", price="30")
+
+    # Precondition: S1 consumed A, S2 consumed B.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s1)} == {buy_a["id"]}
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s2)} == {buy_b["id"]}
+
+    resp = await client.delete(f"/api/transactions/{s1}")
+    assert resp.status_code == 204, resp.text
+
+    # S1's allocs released. S2 rematched onto the freed A lot.
+    assert await _allocs_for_sell(maker, s1) == []
+    a2 = await _allocs_for_sell(maker, s2)
+    assert len(a2) == 1
+    assert a2[0].buy_txn_id == buy_a["id"]
+    assert a2[0].quantity == Decimal("100")
+    assert a2[0].realized_gain_eur == Decimal("2000")  # (30 - 10) * 100
+
+
+@pytest.mark.asyncio
+async def test_create_backdated_buy_recomputes_later_sell_fifo(client_and_session):
+    """Repro 2: B(100)@20 day 3, S(100)@30 day 5 (->B, gain 1000). POSTing a
+    back-dated buy A(100)@10 day 1 must re-run FIFO so S moves onto A (gain 2000).
+    The create path used to skip the recompute and leave S on B."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_b = await _buy(client, acct_id, inst_id, day=3, qty="100", price="20")
+    s = await _make_sell(maker, acct_id, inst_id, day=5, qty="100", price="30")
+
+    # Precondition: S consumed B (the only lot present when it matched).
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s)} == {buy_b["id"]}
+
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="100", price="10")
+
+    allocs = await _allocs_for_sell(maker, s)
+    assert len(allocs) == 1
+    assert allocs[0].buy_txn_id == buy_a["id"]
+    assert allocs[0].quantity == Decimal("100")
+    assert allocs[0].realized_gain_eur == Decimal("2000")  # (30 - 10) * 100
+
+
+@pytest.mark.asyncio
+async def test_create_backdated_spend_self_match_converges_fifo(client_and_session):
+    """Repro 3: A(50)@10 day 1, B(50)@20 day 2, S(50)@30 day 5 (->A). POSTing a
+    back-dated spend(50)@30 day 3 self-matches against contaminated availability
+    and would draw from B (gain 500). Canonical FIFO puts the earlier spend on A
+    (gain 1000) and spills S onto B."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="50", price="10")
+    buy_b = await _buy(client, acct_id, inst_id, day=2, qty="50", price="20")
+    s = await _make_sell(maker, acct_id, inst_id, day=5, qty="50", price="30")
+
+    # Precondition: S consumed A.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s)} == {buy_a["id"]}
+
+    resp = await _spend(client, acct_id, inst_id, day=3, qty="50", price="30")
+    assert resp.status_code == 201, resp.text
+    spend_id = resp.json()["id"]
+
+    sp = await _allocs_for_sell(maker, spend_id)
+    assert len(sp) == 1
+    assert sp[0].buy_txn_id == buy_a["id"]
+    assert sp[0].quantity == Decimal("50")
+    assert sp[0].realized_gain_eur == Decimal("1000")  # (30 - 10) * 50
+
+    a_s = await _allocs_for_sell(maker, s)
+    assert len(a_s) == 1
+    assert a_s[0].buy_txn_id == buy_b["id"]
+    assert a_s[0].quantity == Decimal("50")
+    assert a_s[0].realized_gain_eur == Decimal("500")  # (30 - 20) * 50
+
+
+# ---------------------------------------------------------------------------
+# Plan 015 round-2 fix-ups: the flip-cleanup ordering regression on the PUT
+# path, the create-path trigger hole for disposals dated BEFORE the new row,
+# and the linked-trade path (POST /api/trades) that never recomputed either
+# pair. Each pins exact per-disposal lot + realized_gain_eur (and idempotence
+# where a repeated mutation used to flip attribution).
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_flip_adjustment_with_competing_sell_converges_and_idempotent(
+    client_and_session,
+):
+    """Flip-ordering repro: A(50)@10 day 1, B(50)@20 day 2, adjustment(-50) day 3
+    (->A), S(50)@30 day 4 (->B). PUTting the adjustment to +50 flips it to a lot
+    SOURCE. Canonical FIFO must move S onto the freed A lot (gain 1000). The
+    round-1 order (recompute BEFORE clearing the flipped adjustment's stale
+    allocs) rematched S against contaminated availability and left it on B (gain
+    500), and repeating the identical PUT flipped S back to A."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="50", price="10")
+    buy_b = await _buy(client, acct_id, inst_id, day=2, qty="50", price="20")
+    adj_id = await _make_adjustment(maker, acct_id, inst_id, day=3, delta_qty="-50")
+    s = await _make_sell(maker, acct_id, inst_id, day=4, qty="50", price="30")
+
+    # Precondition: adjustment consumed A, sell consumed B.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, adj_id)} == {buy_a["id"]}
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s)} == {buy_b["id"]}
+
+    resp = await client.put(f"/api/transactions/{adj_id}", json={"quantity": "50"})
+    assert resp.status_code == 200, resp.text
+
+    # The flipped adjustment owns no sell-side allocs. S rematched onto A.
+    assert await _allocs_for_sell(maker, adj_id) == []
+    a_s = await _allocs_for_sell(maker, s)
+    assert len(a_s) == 1
+    assert a_s[0].buy_txn_id == buy_a["id"]
+    assert a_s[0].quantity == Decimal("50")
+    assert a_s[0].realized_gain_eur == Decimal("1000")  # (30 - 10) * 50
+
+    # Idempotence: repeating the identical PUT leaves the alloc content unchanged.
+    content_before = await _all_alloc_content(maker)
+    resp = await client.put(f"/api/transactions/{adj_id}", json={"quantity": "50"})
+    assert resp.status_code == 200, resp.text
+    assert await _all_alloc_content(maker) == content_before
+
+
+@pytest.mark.asyncio
+async def test_create_backdated_buy_before_earlier_spend_recomputes(client_and_session):
+    """Create-path trigger hole (a): POST buy(100)@20 day 5, POST spend(100)@30
+    day 3 (matches the only lot, the day-5 buy, gain 1000), POST buy(100)@10
+    day 4. The new buy is dated AFTER the spend, so the round-1 date>=new-row
+    bound skipped the recompute and left the spend on the day-5 lot. Canonical
+    FIFO puts the spend on the earlier, cheaper day-4 lot (gain 2000)."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_d5 = await _buy(client, acct_id, inst_id, day=5, qty="100", price="20")
+
+    resp = await _spend(client, acct_id, inst_id, day=3, qty="100", price="30")
+    assert resp.status_code == 201, resp.text
+    spend_id = resp.json()["id"]
+
+    # Precondition: the spend matched the only lot present, the day-5 buy.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, spend_id)} == {buy_d5["id"]}
+
+    buy_d4 = await _buy(client, acct_id, inst_id, day=4, qty="100", price="10")
+
+    sp = await _allocs_for_sell(maker, spend_id)
+    assert len(sp) == 1
+    assert sp[0].buy_txn_id == buy_d4["id"]
+    assert sp[0].quantity == Decimal("100")
+    assert sp[0].realized_gain_eur == Decimal("2000")  # (30 - 10) * 100
+
+
+@pytest.mark.asyncio
+async def test_create_backdated_buy_before_earlier_sell_recomputes(client_and_session):
+    """Create-path trigger hole (b): A(100)@10 day 1, C(100)@30 day 10, S(150)@40
+    day 5 (A:100 + C:50). POSTing B(100)@20 day 7 slots a lot between A and C,
+    ahead of C in FIFO order. The new buy is dated AFTER the sell, so the round-1
+    date>=new-row bound skipped the recompute and left S's spill on C:50.
+    Canonical FIFO moves the spill onto B:50."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="100", price="10")
+    buy_c = await _buy(client, acct_id, inst_id, day=10, qty="100", price="30")
+    s = await _make_sell(maker, acct_id, inst_id, day=5, qty="150", price="40")
+
+    # Precondition: S drew A:100 + C:50.
+    pre = {a.buy_txn_id: a.quantity for a in await _allocs_for_sell(maker, s)}
+    assert pre == {buy_a["id"]: Decimal("100"), buy_c["id"]: Decimal("50")}
+
+    buy_b = await _buy(client, acct_id, inst_id, day=7, qty="100", price="20")
+
+    post = {a.buy_txn_id: a for a in await _allocs_for_sell(maker, s)}
+    assert set(post) == {buy_a["id"], buy_b["id"]}
+    assert post[buy_a["id"]].quantity == Decimal("100")
+    assert post[buy_a["id"]].realized_gain_eur == Decimal("3000")  # (40 - 10) * 100
+    assert post[buy_b["id"]].quantity == Decimal("50")
+    assert post[buy_b["id"]].realized_gain_eur == Decimal("1000")  # (40 - 20) * 50
+
+
+@pytest.mark.asyncio
+async def test_trade_backdated_sell_leg_converges_fifo(client_and_session):
+    """Linked-trade sell leg: A(50)@10 day 1, B(50)@20 day 2, S(50)@30 day 5
+    (->A). A trade sells 50 @30 dated day 3, ahead of S in FIFO order.
+    create_linked_trade self-matched the trade sell only and never recomputed,
+    landing it on B (gain 500). Canonical FIFO puts the earlier trade sell on A
+    (gain 1000) and spills S onto B (gain 500)."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    recv_inst = await _new_instrument(client, "USDC")
+    buy_a = await _buy(client, acct_id, inst_id, day=1, qty="50", price="10")
+    buy_b = await _buy(client, acct_id, inst_id, day=2, qty="50", price="20")
+    s = await _make_sell(maker, acct_id, inst_id, day=5, qty="50", price="30")
+
+    # Precondition: S drew A.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, s)} == {buy_a["id"]}
+
+    resp = await _create_trade(
+        client,
+        sold_acct=acct_id,
+        sold_inst=inst_id,
+        sold_qty="50",
+        sold_price="30",
+        recv_acct=acct_id,
+        recv_inst=recv_inst,
+        recv_qty="1500",
+        recv_price="1",
+        day=3,
+    )
+    assert resp.status_code == 201, resp.text
+    trade_sell_id = resp.json()["sold_txn_id"]
+
+    ts = await _allocs_for_sell(maker, trade_sell_id)
+    assert len(ts) == 1
+    assert ts[0].buy_txn_id == buy_a["id"]
+    assert ts[0].quantity == Decimal("50")
+    assert ts[0].realized_gain_eur == Decimal("1000")  # (30 - 10) * 50
+
+    a_s = await _allocs_for_sell(maker, s)
+    assert len(a_s) == 1
+    assert a_s[0].buy_txn_id == buy_b["id"]
+    assert a_s[0].quantity == Decimal("50")
+    assert a_s[0].realized_gain_eur == Decimal("500")  # (30 - 20) * 50
+
+
+@pytest.mark.asyncio
+async def test_trade_backdated_received_leg_reattributes_sell_fifo(client_and_session):
+    """Linked-trade received leg: on instrument Y, C(100)@20 day 3 and SY(100)@30
+    day 5 (->C, gain 1000). A trade receives 100 Y @10 dated day 1, a lot earlier
+    than C. create_linked_trade never recomputed the received pair, so SY stayed
+    on C. Canonical FIFO moves SY onto the new, earlier, cheaper lot (gain
+    2000)."""
+    client, maker = client_and_session
+    sold_acct, sold_inst = await _create_account_and_instrument(client)
+    recv_inst = await _new_instrument(client, "ETH")
+    # Sold-leg lots so the trade sell is coverable (the sold pair is irrelevant).
+    await _buy(client, sold_acct, sold_inst, day=1, qty="100", price="5")
+    # Received-instrument history: a lot then a later sell drawing from it.
+    buy_c = await _buy(client, sold_acct, recv_inst, day=3, qty="100", price="20")
+    sy = await _make_sell(maker, sold_acct, recv_inst, day=5, qty="100", price="30")
+
+    # Precondition: SY drew C.
+    assert {a.buy_txn_id for a in await _allocs_for_sell(maker, sy)} == {buy_c["id"]}
+
+    resp = await _create_trade(
+        client,
+        sold_acct=sold_acct,
+        sold_inst=sold_inst,
+        sold_qty="10",
+        sold_price="50",
+        recv_acct=sold_acct,
+        recv_inst=recv_inst,
+        recv_qty="100",
+        recv_price="10",
+        day=1,
+    )
+    assert resp.status_code == 201, resp.text
+    new_lot_id = resp.json()["received_txn_id"]
+
+    a_sy = await _allocs_for_sell(maker, sy)
+    assert len(a_sy) == 1
+    assert a_sy[0].buy_txn_id == new_lot_id
+    assert a_sy[0].quantity == Decimal("100")
+    assert a_sy[0].realized_gain_eur == Decimal("2000")  # (30 - 10) * 100
