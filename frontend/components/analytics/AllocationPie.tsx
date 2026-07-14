@@ -16,7 +16,8 @@ import { useTagFilter } from "@/lib/tag-filter";
 import { formatMoney, instrumentTypeLabel } from "@/lib/format";
 import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
-import { PIE_PALETTE } from "@/components/charts/palette";
+import { ACCENT, MUTED, PIE_PALETTE } from "@/components/charts/palette";
+import { tooltipShell } from "@/lib/chart-utils";
 
 echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer]);
 
@@ -71,7 +72,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
       textStyle: {
         fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
         fontSize: 12,
-        color: "#737373",
+        color: MUTED,
       },
       color: [...PIE_PALETTE],
       legend: {
@@ -83,20 +84,11 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
         textStyle: {
           fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
           fontSize: 12,
-          color: "#737373",
+          color: MUTED,
         },
       },
       tooltip: {
-        trigger: "item",
-        backgroundColor: "#FFFFFF",
-        borderColor: "#E5E5E5",
-        borderWidth: 1,
-        textStyle: {
-          color: "#262626",
-          fontSize: 14,
-          fontFamily: "Inter, system-ui, sans-serif",
-        },
-        padding: [8, 12],
+        ...tooltipShell("item"),
         formatter: (params: { name: string; value: number; percent: number }) => {
           const val = formatMoney(params.value, currency as "EUR" | "USD");
           return `${params.name}: ${val} (${params.percent}%)`;
@@ -114,10 +106,10 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
             position: "outside",
             formatter: "{d}%",
             fontSize: 12,
-            color: "#737373",
+            color: MUTED,
           },
           labelLine: {
-            lineStyle: { color: "#262626" },
+            lineStyle: { color: ACCENT },
           },
           data: data.slices.map((s: AllocationSlice) => {
             // UX-M3: humanize raw lowercase enum labels for the by-type donut
@@ -176,7 +168,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
             style: {
               text: "Total",
               font: "12px Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-              fill: "#737373",
+              fill: MUTED,
               textAlign: "center",
               textVerticalAlign: "middle",
             },
