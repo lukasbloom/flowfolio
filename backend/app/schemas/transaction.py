@@ -140,6 +140,18 @@ class TransactionUpdate(DecimalModel):
     fee_eur: Optional[DecimalStr] = None
     notes: Optional[str] = None
 
+    @model_validator(mode="after")
+    def validate_currency_supported(self) -> "TransactionUpdate":
+        """Only EUR/USD txn currencies, same restriction as TransactionCreate."""
+        if (
+            self.price_currency is not None
+            and self.price_currency not in {"EUR", "USD"}
+        ):
+            raise ValueError(
+                f"price_currency must be 'EUR' or 'USD', got {self.price_currency!r}"
+            )
+        return self
+
 
 class LotAllocResponse(DecimalORMModel):
 

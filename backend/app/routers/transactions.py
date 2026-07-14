@@ -53,9 +53,14 @@ def _compute_diff_from_snapshots(
     return diff
 
 
-# Fields whose edit changes FIFO matching: quantity/unit_price/fx feed realized
-# gains, date feeds FIFO ordering. A notes-only or fee-only edit skips recompute.
-_FIFO_RELEVANT_FIELDS = frozenset({"quantity", "unit_price", "fx_rate_to_eur", "date"})
+# Fields whose edit changes FIFO matching or lot economics: quantity/unit_price/fx
+# feed realized gains, date feeds FIFO ordering, and price_currency triggers the
+# FX re-lock in update_transaction, which mutates fx_rate_to_eur even when the
+# client didn't send that key explicitly. A notes-only or fee-only edit skips
+# recompute.
+_FIFO_RELEVANT_FIELDS = frozenset(
+    {"quantity", "unit_price", "fx_rate_to_eur", "date", "price_currency"}
+)
 
 
 async def _release_and_recompute_for_deleted(
@@ -328,6 +333,38 @@ async def update_transaction(
             setattr(txn, field, signed)
         else:
             setattr(txn, field, value)
+
+    # FX re-lock: mirror create_transaction's auto-lock when a PUT changes
+    # price_currency. Editing an existing EUR row (fx_rate_to_eur=1) to USD
+    # without supplying a rate would otherwise leave the locked rate at 1,
+    # silently turning e.g. a $100 price into a €100 cost basis.
+    if "price_currency" in update_data:
+        if txn.price_currency == "EUR" and "fx_rate_to_eur" not in update_data:
+            # Identity rate, never call Frankfurter for EUR<->EUR
+            txn.fx_rate_to_eur = Decimal("1")
+        elif txn.price_currency == "USD" and "fx_rate_to_eur" not in update_data:
+            # No explicit rate: fetch from Frankfurter and lock immutably on this row
+            async with httpx.AsyncClient() as fx_client:
+                try:
+                    fx_row = await get_or_fetch_fx_rate(
+                        db, fx_client, txn.date, base="EUR", quote="USD"
+                    )
+                except ValueError as exc:
+                    await db.rollback()
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            f"fx upstream error: {exc} — retry or supply "
+                            "fx_rate_to_eur explicitly"
+                        ),
+                    )
+            txn.fx_rate_to_eur = fx_row.rate
+        # else: the same PUT supplied fx_rate_to_eur explicitly (broker-rate
+        # override). The apply-updates loop above already stored it verbatim.
+    # If price_currency is untouched, leave the locked rate alone even when
+    # date changes. Locked-at-transaction-time is the documented semantic,
+    # and silently re-fetching on a date edit would overwrite a deliberate
+    # broker rate.
 
     txn.cost_basis_eur = _compute_cost_basis(txn)
 
