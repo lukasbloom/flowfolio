@@ -7,11 +7,15 @@ Critical assertions:
 - yield txn type is accepted (manual yield POST returns 201)
 - adjustment txn type is rejected (system-created only)
 - Non-EUR transactions require fx_rate_to_eur
+- PUT re-locks fx_rate_to_eur when the edit changes price_currency (see
+  tests/test_txn_fx_locking.py for the analogous POST-path coverage)
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
+import httpx
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -74,6 +78,50 @@ async def _create_account_and_instrument(client):
         )
     ).json()
     return acct["id"], inst["id"]
+
+
+# Captured once at import time, before any test monkeypatches
+# app.routers.transactions.httpx.AsyncClient (which is the same module-level
+# httpx.AsyncClient this file imports). Patching twice in one test must
+# REPLACE the mock transport, not wrap the previous factory around it, so
+# the factory below always builds on this original class rather than on
+# whatever the last patch left behind.
+_REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _patch_frankfurter(monkeypatch, handler) -> None:
+    """Replace httpx.AsyncClient referenced from app.routers.transactions with a
+    MockTransport-backed client that runs `handler`. Mirrors
+    tests/test_txn_fx_locking.py's helper of the same name."""
+    transport = httpx.MockTransport(handler)
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return _REAL_ASYNC_CLIENT(*args, **kwargs)
+
+    monkeypatch.setattr("app.routers.transactions.httpx.AsyncClient", factory)
+
+
+def _frankfurter_ok(rate: str, date_str: str):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "amount": 1,
+                "base": "EUR",
+                "date": date_str,
+                "rates": {"USD": float(rate)},
+            },
+        )
+
+    return handler
+
+
+def _frankfurter_must_not_be_called():
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("must NOT call Frankfurter")
+
+    return handler
 
 
 @pytest.mark.asyncio
@@ -405,6 +453,314 @@ async def test_non_eur_currency_blocked(client_and_session):
         },
     )
     assert resp.status_code == 422, "Non-EUR/USD currency must be rejected"
+
+
+# ---------------------------------------------------------------------------
+# PUT re-locks fx_rate_to_eur on a price_currency edit (bug: was silently
+# left at the old rate, e.g. a $100 price landing as a €100 cost basis).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_eur_to_usd_flip_without_rate_fetches(client_and_session, monkeypatch):
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-05-01",
+            "quantity": "10",
+            "unit_price": "100.00",
+            "price_currency": "EUR",
+        },
+    )
+    assert create_resp.status_code == 201
+    assert Decimal(create_resp.json()["fx_rate_to_eur"]) == Decimal("1")
+    txn_id = create_resp.json()["id"]
+
+    _patch_frankfurter(monkeypatch, _frankfurter_ok("1.2000", "2025-05-01"))
+
+    upd = await client.put(
+        f"/api/transactions/{txn_id}", json={"price_currency": "USD"}
+    )
+    assert upd.status_code == 200, upd.text
+    data = upd.json()
+    assert Decimal(data["fx_rate_to_eur"]) == Decimal("1.2000")
+    expected = (Decimal("10") * Decimal("100") / Decimal("1.2000")).quantize(
+        Decimal("0.00000001")
+    )
+    assert Decimal(data["cost_basis_eur"]) == expected
+
+
+@pytest.mark.asyncio
+async def test_put_usd_to_eur_flip_locks_identity_rate(client_and_session, monkeypatch):
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-05-02",
+            "quantity": "10",
+            "unit_price": "100.00",
+            "price_currency": "USD",
+            "fx_rate_to_eur": "1.10",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+
+    # Flipping to EUR must never call Frankfurter, identity rate is local.
+    _patch_frankfurter(monkeypatch, _frankfurter_must_not_be_called())
+
+    upd = await client.put(
+        f"/api/transactions/{txn_id}", json={"price_currency": "EUR"}
+    )
+    assert upd.status_code == 200, upd.text
+    data = upd.json()
+    assert Decimal(data["fx_rate_to_eur"]) == Decimal("1")
+    expected = (Decimal("10") * Decimal("100") / Decimal("1")).quantize(
+        Decimal("0.00000001")
+    )
+    assert Decimal(data["cost_basis_eur"]) == expected
+
+
+@pytest.mark.asyncio
+async def test_put_currency_flip_with_explicit_rate_is_honored(
+    client_and_session, monkeypatch
+):
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-05-03",
+            "quantity": "10",
+            "unit_price": "100.00",
+            "price_currency": "EUR",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+
+    # An explicit rate in the same PUT must be honored verbatim, no fetch.
+    _patch_frankfurter(monkeypatch, _frankfurter_must_not_be_called())
+
+    upd = await client.put(
+        f"/api/transactions/{txn_id}",
+        json={"price_currency": "USD", "fx_rate_to_eur": "1.2500"},
+    )
+    assert upd.status_code == 200, upd.text
+    assert Decimal(upd.json()["fx_rate_to_eur"]) == Decimal("1.2500")
+
+
+@pytest.mark.asyncio
+async def test_put_invalid_currency_rejected(client_and_session):
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-05-04",
+            "quantity": "10",
+            "unit_price": "100.00",
+            "price_currency": "EUR",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+
+    upd = await client.put(
+        f"/api/transactions/{txn_id}", json={"price_currency": "GBP"}
+    )
+    assert upd.status_code == 422, upd.text
+
+
+@pytest.mark.asyncio
+async def test_put_date_only_edit_keeps_locked_rate(client_and_session, monkeypatch):
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    _patch_frankfurter(monkeypatch, _frankfurter_ok("1.1500", "2025-05-05"))
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-05-05",
+            "quantity": "10",
+            "unit_price": "100.00",
+            "price_currency": "USD",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+    assert Decimal(create_resp.json()["fx_rate_to_eur"]) == Decimal("1.1500")
+
+    # A date-only edit must not touch price_currency and must not re-fetch.
+    _patch_frankfurter(monkeypatch, _frankfurter_must_not_be_called())
+    upd = await client.put(
+        f"/api/transactions/{txn_id}", json={"date": "2025-06-01"}
+    )
+    assert upd.status_code == 200, upd.text
+    assert Decimal(upd.json()["fx_rate_to_eur"]) == Decimal("1.1500")
+
+
+# ---------------------------------------------------------------------------
+# A currency flip must recompute FIFO, not just re-lock the rate in isolation.
+# price_currency is not itself a FIFO-relevant field pre-fix, so a currency
+# edit could silently mutate fx_rate_to_eur (hence cost basis and realized
+# gains) on a txn with existing lot_alloc rows without ever re-running FIFO,
+# leaving LotAlloc.realized_gain_eur computed from the stale rate.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_put_currency_flip_on_sell_refreshes_stale_realized_gain(
+    client_and_session, monkeypatch
+):
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    # Buy 10 @ 100 EUR (fx=1) -> buy_price_eur = 100
+    buy_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-06-01",
+            "quantity": "10",
+            "unit_price": "100",
+            "price_currency": "EUR",
+        },
+    )
+    assert buy_resp.status_code == 201
+
+    # Sell 10 @ 150 EUR (fx=1) via session (bare sells rejected at API level)
+    # -> realized_gain_eur = (150 - 100) * 10 = 500
+    from app.models.transaction import Transaction as Txn
+    from app.services.fifo import match_lots_for_sell
+
+    async with maker() as session:
+        sell_txn = Txn(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="sell",
+            date=date(2025, 6, 2),
+            quantity=Decimal("-10"),
+            unit_price=Decimal("150"),
+            price_currency="EUR",
+            fx_rate_to_eur=Decimal("1"),
+        )
+        session.add(sell_txn)
+        await session.flush()
+        await match_lots_for_sell(session, sell_txn)
+        await session.commit()
+        sell_id = sell_txn.id
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        alloc = result.scalars().one()
+    assert alloc.realized_gain_eur == Decimal("500.00000000")
+
+    # Flip the sell to USD without an explicit rate -> fetch rate 1.5.
+    # sell_price_eur becomes 150 / 1.5 = 100, so the new gain is 0.
+    _patch_frankfurter(monkeypatch, _frankfurter_ok("1.5000", "2025-06-02"))
+    upd = await client.put(
+        f"/api/transactions/{sell_id}", json={"price_currency": "USD"}
+    )
+    assert upd.status_code == 200, upd.text
+    assert Decimal(upd.json()["fx_rate_to_eur"]) == Decimal("1.5000")
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        alloc = result.scalars().one()
+    assert alloc.realized_gain_eur == Decimal(
+        "0.00000000"
+    ), "stale realized_gain_eur must be recomputed after the currency flip"
+
+
+@pytest.mark.asyncio
+async def test_put_currency_flip_on_buy_refreshes_stale_realized_gain(
+    client_and_session, monkeypatch
+):
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+
+    # Buy 10 @ 100 EUR (fx=1) -> buy_price_eur = 100
+    buy_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2025-06-10",
+            "quantity": "10",
+            "unit_price": "100",
+            "price_currency": "EUR",
+        },
+    )
+    assert buy_resp.status_code == 201
+    buy_id = buy_resp.json()["id"]
+
+    # Sell 10 @ 150 EUR (fx=1) via session -> realized_gain_eur = 500
+    from app.models.transaction import Transaction as Txn
+    from app.services.fifo import match_lots_for_sell
+
+    async with maker() as session:
+        sell_txn = Txn(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="sell",
+            date=date(2025, 6, 11),
+            quantity=Decimal("-10"),
+            unit_price=Decimal("150"),
+            price_currency="EUR",
+            fx_rate_to_eur=Decimal("1"),
+        )
+        session.add(sell_txn)
+        await session.flush()
+        await match_lots_for_sell(session, sell_txn)
+        await session.commit()
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        alloc = result.scalars().one()
+    assert alloc.realized_gain_eur == Decimal("500.00000000")
+
+    # Flip the BUY (the consumed lot) to USD without an explicit rate ->
+    # fetch rate 2.0. buy_price_eur becomes 100 / 2.0 = 50, sell is untouched
+    # (still EUR @ 150), so the new gain is (150 - 50) * 10 = 1000.
+    _patch_frankfurter(monkeypatch, _frankfurter_ok("2.0000", "2025-06-10"))
+    upd = await client.put(
+        f"/api/transactions/{buy_id}", json={"price_currency": "USD"}
+    )
+    assert upd.status_code == 200, upd.text
+    assert Decimal(upd.json()["fx_rate_to_eur"]) == Decimal("2.0000")
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        alloc = result.scalars().one()
+    assert alloc.realized_gain_eur == Decimal(
+        "1000.00000000"
+    ), "stale realized_gain_eur must be recomputed after the buy-side currency flip"
 
 
 def test_transaction_update_date_field_accepts_iso_string():
