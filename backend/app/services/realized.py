@@ -104,12 +104,15 @@ async def get_realized_totals(
     display_currency: str = "EUR",
     tag_filter: str | None = None,
 ) -> RealizedTotals:
-    year_start = date(clock.today().year, 1, 1)
+    # "This year" is a calendar boundary the user reasons about in their own
+    # timezone, so use today_local() per clock.today_local's docstring, not
+    # the UTC today().
+    year_start = date(clock.today_local().year, 1, 1)
     lifetime = await _realized_sum(session, tag_filter=tag_filter)
     this_year = await _realized_sum(
         session, tag_filter=tag_filter, start_date=year_start
     )
-    as_of = clock.today()
+    as_of = clock.today_local()
     return RealizedTotals(
         currency=display_currency,
         lifetime=await _convert_currency(session, lifetime, "EUR", display_currency, as_of),
