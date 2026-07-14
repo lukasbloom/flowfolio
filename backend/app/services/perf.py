@@ -532,16 +532,20 @@ async def get_performance_rows(
         elif current_value is not None:
             percent_return = (current_value - open_buy_basis) / open_buy_basis
 
-        # Resolve first_buy_date once and reuse it for both the TWRR
-        # window resolution and the quote-day-count "all-timeframe" fallback.
-        # Avoids two redundant round-trips per holding under the `all`
-        # timeframe and removes a torn-read window where the two queries could
-        # disagree if a buy is inserted between them.
-        first_buy_date = await _first_buy_date(session, account_id, instrument_id)
         # Feed TWRR the preloaded quote/txn lists so its
         # _quotes_in_window / _transactions_for_position round-trips are skipped.
         preloaded_quotes = twrr_quotes_by_instrument.get(instrument_id, [])
         preloaded_txns = twrr_txns_by_holding.get((account_id, instrument_id), [])
+        # Resolve first_buy_date once and reuse it for both the TWRR
+        # window resolution and the quote-day-count "all-timeframe" fallback.
+        # Avoids two redundant round-trips per holding under the `all`
+        # timeframe and removes a torn-read window where the two queries could
+        # disagree if a buy is inserted between them. Derived from the
+        # preloaded transactions (no query). Falls back to the DB helper only
+        # when the preload (bounded by date <= as_of) yields no positive buy.
+        first_buy_date = _first_buy_from_preload(preloaded_txns)
+        if first_buy_date is None:
+            first_buy_date = await _first_buy_date(session, account_id, instrument_id)
         twrr = await calculate_twrr(
             session,
             account_id,
@@ -785,6 +789,18 @@ def _quote_day_count_from_preload(
     ordering is irrelevant to a distinct-date count; only the bounds must match.
     """
     return len({q.date for q in preloaded if start <= q.date <= end})
+
+
+def _first_buy_from_preload(txns: list[Transaction]) -> date | None:
+    """min(date) over positive buy/adjustment rows, mirroring
+    quotes.first_buy_date. The preload is bounded by date <= as_of, so a None
+    here does not prove the DB has no buys, callers must fall back."""
+    dates = [
+        t.date
+        for t in txns
+        if t.txn_type in ("buy", "adjustment") and t.quantity > Decimal("0")
+    ]
+    return min(dates) if dates else None
 
 
 def _price_on_or_before(quotes: list[PriceQuote], on_date: date) -> Decimal | None:
