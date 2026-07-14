@@ -22,6 +22,7 @@ import { formatCompactMoney, formatMoney } from "@/lib/format";
 import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { ACCENT, MUTED, BORDER, CONTRIB_BAR_PALETTE } from "@/components/charts/palette";
+import { mutedAxisLabel, tooltipShell, valueYAxis } from "@/lib/chart-utils";
 import { PeriodToggle } from "@/components/contributions/PeriodToggle";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
@@ -99,32 +100,13 @@ export function ContributionBars() {
         data: categories,
         axisLine: { lineStyle: { color: BORDER } },
         axisTick: { show: false },
-        axisLabel: { color: MUTED, fontSize: 12, hideOverlap: true },
+        axisLabel: { ...mutedAxisLabel(), hideOverlap: true },
         splitLine: { show: false },
       },
-      yAxis: {
-        type: "value",
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: {
-          color: MUTED,
-          fontSize: 12,
-          formatter: (val: number) => formatCompactMoney(val, currency),
-        },
-        splitLine: { lineStyle: { color: BORDER, type: "dashed" } },
-      },
+      yAxis: valueYAxis((val: number) => formatCompactMoney(val, currency)),
       tooltip: {
-        trigger: "axis",
+        ...tooltipShell("axis"),
         axisPointer: { type: "shadow" },
-        backgroundColor: "#FFFFFF",
-        borderColor: BORDER,
-        borderWidth: 1,
-        textStyle: {
-          color: ACCENT,
-          fontSize: 14,
-          fontFamily: "Inter, system-ui, sans-serif",
-        },
-        padding: [8, 12],
         formatter: (params: unknown) => {
           const arr = Array.isArray(params) ? params : [];
           if (!arr.length) return "";
