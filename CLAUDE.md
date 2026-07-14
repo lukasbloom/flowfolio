@@ -170,7 +170,7 @@ Why scrape rather than an API — no free *official* API covers EU UCITS by ISIN
 | Library | Version | Purpose | When to Use |
 |---------|---------|---------|-------------|
 | `passlib[bcrypt]` | 1.7.x | Password hashing | Auth implementation |
-| `python-jose[cryptography]` | 3.x | JWT / signed session tokens | Auth implementation |
+| `pyjwt` | 2.x | JWT / signed session tokens (HS256, no crypto extra needed) | Auth implementation |
 | `aiosqlite` | 0.20.x | Async SQLite driver for SQLAlchemy | Always (SQLite backend) |
 | `alembic` | 1.13.x | DB migrations | Every schema change |
 | `pydantic-settings` | 2.x | Config from env vars | App configuration (API keys, DB path) |
