@@ -3,7 +3,11 @@
  * NetWorthChart and InstrumentPriceChart.
  */
 
-import { ACCENT, BORDER, MUTED } from "../components/charts/palette";
+// Explicit .ts extension: lib/__tests__/chart-utils.test.ts exercises this
+// module directly through Node's ESM loader (`node --test
+// --experimental-strip-types`), which requires a resolvable specifier.
+// `allowImportingTsExtensions` keeps tsc/Next happy with the same import.
+import { ACCENT, BORDER, MUTED } from "../components/charts/palette.ts";
 
 /**
  * Escape a string for safe interpolation into an ECharts tooltip's innerHTML.
