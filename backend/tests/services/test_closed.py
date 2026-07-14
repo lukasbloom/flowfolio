@@ -116,6 +116,31 @@ async def _sell(
     return txn
 
 
+async def _adjustment(
+    session: AsyncSession,
+    account: Account,
+    instrument: Instrument,
+    *,
+    trade_date: date,
+    qty: str,
+) -> Transaction:
+    """Mirror reconciliation._write_adjustment_txn: signed delta, no price/FX."""
+    txn = Transaction(
+        account_id=account.id,
+        instrument_id=instrument.id,
+        txn_type="adjustment",
+        date=trade_date,
+        quantity=Decimal(qty),
+        unit_price=None,
+        price_currency=None,
+        fx_rate_to_eur=None,
+        cost_basis_eur=None,
+    )
+    session.add(txn)
+    await session.flush()
+    return txn
+
+
 async def _quote(
     session: AsyncSession,
     instrument: Instrument,
@@ -274,3 +299,54 @@ async def test_closed_position_twrr_uses_hold_window_and_marks_annualized(sessio
     assert rows[0].twrr is not None
     assert rows[0].twrr_window_days == 367
     assert rows[0].twrr_annualized is True
+
+
+@pytest.mark.asyncio
+async def test_trim_closed_position_appears_with_adjustment_date_and_sell_only_realized(
+    session,
+):
+    """Buy 100 @ 10, sell 60 @ 20 (realized 600), then a reconciliation trim of
+    the remaining 40 to zero. The position must still appear in the closed
+    view, closed on the trimming adjustment's date, with realized money
+    unmoved by the correction (plan 018)."""
+    account, instrument = await _account_instrument(session)
+    buy = await _buy(
+        session, account, instrument, trade_date=date(2025, 1, 1), qty="100", price="10"
+    )
+    await _sell(
+        session,
+        account,
+        instrument,
+        buy,
+        trade_date=date(2025, 3, 1),
+        qty="60",
+        price="20",
+        realized_gain_eur="600",
+    )
+    await _adjustment(session, account, instrument, trade_date=date(2025, 6, 1), qty="-40")
+    await _quote(session, instrument, quote_date=date(2025, 6, 1), price="150")
+
+    rows = await get_closed_positions(session, display_currency="EUR")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.last_close_date == date(2025, 6, 1)
+    assert row.realized_eur == Decimal("600")
+
+
+@pytest.mark.asyncio
+async def test_trim_closed_position_with_no_sells_shows_zero_realized(session):
+    """A position trimmed to zero purely by a reconciliation adjustment, with
+    no sell/spend transactions at all, still appears in the closed view with
+    realized money at exactly zero (plan 018)."""
+    account, instrument = await _account_instrument(session, symbol="ETH")
+    await _buy(session, account, instrument, trade_date=date(2025, 1, 1), qty="100", price="10")
+    await _adjustment(session, account, instrument, trade_date=date(2025, 4, 1), qty="-100")
+    await _quote(session, instrument, quote_date=date(2025, 4, 1), price="120")
+
+    rows = await get_closed_positions(session, display_currency="EUR")
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.last_close_date == date(2025, 4, 1)
+    assert row.realized_eur == Decimal("0")

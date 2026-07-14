@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
@@ -48,7 +48,7 @@ async def get_closed_positions(
     # only the closed holdings — instead of calling _open_quantity per holding and
     # discarding the non-closed ones, plus N more queries each.
     closed_set = await _closed_holding_set(session)
-    last_disposal_by_holding = await _last_disposal_dates_batch(session, closed_set)
+    last_closed_by_holding = await _last_closed_dates_batch(session, closed_set)
     buy_basis_by_holding, buy_qty_by_holding = await _buy_basis_and_qty_batch(
         session, closed_set
     )
@@ -62,7 +62,7 @@ async def get_closed_positions(
         if (account_id, instrument_id) not in closed_set:
             continue
 
-        last_close_date = last_disposal_by_holding.get((account_id, instrument_id))
+        last_close_date = last_closed_by_holding.get((account_id, instrument_id))
         first_buy_date = first_buy_by_holding.get((account_id, instrument_id))
         account = accounts_by_id.get(account_id)
         instrument = instruments_by_id.get(instrument_id)
@@ -176,33 +176,41 @@ async def _closed_holding_set(session: AsyncSession) -> set[tuple[str, str]]:
     return {key for key, total in totals.items() if total == ZERO}
 
 
-async def _last_disposal_dates_batch(
+async def _last_closed_dates_batch(
     session: AsyncSession, closed_set: set[tuple[str, str]]
 ) -> dict[tuple[str, str], date]:
-    """Batched last-disposal date per (account, instrument), restricted to the
-    closed set. Same predicate as _last_disposal_date: max(date) WHERE txn_type
-    in (sell, spend), deleted_at IS NULL, grouped per holding.
+    """Batched last-activity ("closed on") date per (account, instrument),
+    restricted to the closed set: max(date) over sell/spend disposals plus
+    DOWNWARD (negative-quantity) adjustments, deleted_at IS NULL. A negative
+    reconciliation trim closes a position exactly like a sale (plan 018), so
+    it must supply the closed date even when the holding has no sell/spend
+    row at all. Upward adjustments are lot sources, not closures, and stay
+    excluded. quantity is TEXT-backed (DecimalText), so the adjustment sign
+    filter moves to Python, mirroring fifo.py's convention.
     """
     if not closed_set:
         return {}
-    stmt = (
-        select(
-            Transaction.account_id,
-            Transaction.instrument_id,
-            func.max(Transaction.date).label("last_date"),
-        )
-        .where(
-            Transaction.txn_type.in_(("sell", "spend")),
-            Transaction.deleted_at.is_(None),
-        )
-        .group_by(Transaction.account_id, Transaction.instrument_id)
+    stmt = select(
+        Transaction.account_id,
+        Transaction.instrument_id,
+        Transaction.date,
+        Transaction.txn_type,
+        Transaction.quantity,
+    ).where(
+        Transaction.txn_type.in_(("sell", "spend", "adjustment")),
+        Transaction.deleted_at.is_(None),
     )
     result = await session.execute(stmt)
-    return {
-        (row.account_id, row.instrument_id): row.last_date
-        for row in result
-        if (row.account_id, row.instrument_id) in closed_set and row.last_date is not None
-    }
+    last_by: dict[tuple[str, str], date] = {}
+    for account_id, instrument_id, txn_date, txn_type, qty in result:
+        if txn_type == "adjustment" and qty >= ZERO:
+            continue
+        key = (account_id, instrument_id)
+        if key not in closed_set:
+            continue
+        if key not in last_by or txn_date > last_by[key]:
+            last_by[key] = txn_date
+    return last_by
 
 
 async def _first_buy_dates_batch(
