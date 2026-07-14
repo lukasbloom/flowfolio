@@ -137,8 +137,16 @@ async def get_networth_series(
     cost_basis_allocations: list = []
     if include_cost_basis:
         cost_basis_buys = [txn for txn in transactions if txn.txn_type == "buy"]
+        # Downward adjustments consume open lots (plan 008), so their allocs must
+        # feed _open_lots_at like sell/spend allocs do. Omitting them leaves the
+        # trimmed quantity counted as still-open basis (phantom cost basis). The
+        # downward-only sign filter runs in Python since quantity is TEXT-backed,
+        # mirroring fifo.py's convention.
         sell_txn_ids = {
-            txn.id for txn in transactions if txn.txn_type in {"sell", "spend"}
+            txn.id
+            for txn in transactions
+            if txn.txn_type in {"sell", "spend"}
+            or (txn.txn_type == "adjustment" and txn.quantity < ZERO)
         }
         cost_basis_allocations = await _load_allocations(session, sell_txn_ids)
 
