@@ -1,5 +1,4 @@
 from collections import defaultdict
-from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import delete as sql_delete
@@ -130,14 +129,12 @@ async def recompute_fifo_for_pair(
     session: AsyncSession,
     account_id: str,
     instrument_id: str,
-    after_date: date = date.min,
 ) -> None:
-    """Re-run FIFO for every disposal on this (account, instrument) pair whose
-    date >= after_date, in FIFO order. A disposal here is a sell, a spend, or a
-    DOWNWARD (negative) adjustment. A negative reconciliation trim consumes open
-    lots exactly like a sell. Pass date.min (the default) to re-match the whole
-    pair: a disposal can consume a buy dated after it, so per-disposal rematching
-    is order-sensitive and must run pair-wide.
+    """Re-run FIFO for every disposal on this (account, instrument) pair, in
+    FIFO order. A disposal here is a sell, a spend, or a DOWNWARD (negative)
+    adjustment. A negative reconciliation trim consumes open lots exactly like
+    a sell. The rematch is always pair-wide: a disposal can consume a buy dated
+    after it, so per-disposal rematching is order-sensitive.
 
     Deletes the lot allocs of ALL selected disposals first (one flush), then
     rematches each in FIFO order. Rematching one at a time would let a
@@ -155,7 +152,6 @@ async def recompute_fifo_for_pair(
             # comparison would coerce the text against a number). Positive
             # adjustments are lot sources, not disposals, and are dropped below.
             Transaction.txn_type.in_(DISPOSAL_TXN_TYPES | {"adjustment"}),
-            Transaction.date >= after_date,
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
