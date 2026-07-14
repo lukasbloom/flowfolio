@@ -267,11 +267,15 @@ async def save_event(
                     f"app {app_qty} → actual {snapshot_qty}"
                 ),
             )
+            # Re-match the whole pair in canonical FIFO order (plan 015). The old
+            # snapshot_date-scoped recompute only re-ran disposals dated on or
+            # after the snapshot, so a back-dated adjustment that changes which
+            # lot an EARLIER sell should draw from left that sell on stale
+            # attribution. A pair-wide recompute is the only sound scope.
             await recompute_fifo_for_pair(
                 session,
                 payload.account_id,
                 decision.instrument_id,
-                payload.snapshot_date,
             )
         elif decision.action == "dismiss":
             # Distinguish None (no reason field at all) from "" (user opened
@@ -393,26 +397,22 @@ async def save_event(
             session.add(reject_txn)
             await session.flush()  # populate reject_txn.id
 
-            # FIFO matching for sell/spend rejects (mirrors
-            # routers/transactions.py manual-create path). Without this,
-            # rejected disposals would land without LotAlloc rows and
-            # realized-P&L (services/realized, services/closed) would silently
-            # skip them.
-            #
-            # If the reject is back-dated relative to existing later sells, the
-            # new disposal competes for lots ahead of them in FIFO order — the
-            # recompute helper handles this by deleting and re-running FIFO for
-            # every sell/spend with date >= effective_date (which INCLUDES the
-            # row we just inserted, so we don't need to call
-            # match_lots_for_sell separately — the recompute matches it as
-            # part of the same pass).
-            if rtxn.txn_type in DISPOSAL_TXN_TYPES:
-                await recompute_fifo_for_pair(
-                    session,
-                    payload.account_id,
-                    rtxn.instrument_id,
-                    effective_date,
-                )
+            # Re-match the whole pair in canonical FIFO order (plan 015). This
+            # single pair-wide recompute serves both reject shapes: for a
+            # sell/spend reject it matches the new disposal (the recompute INCLUDES
+            # the row we just inserted, so no separate match_lots_for_sell call is
+            # needed) AND re-attributes any later disposals it now competes with.
+            # For a back-dated buy reject it re-attributes existing disposals onto
+            # the new lot they should draw from. The old date >= effective_date
+            # scope was unsound (it skipped earlier disposals holding a lot dated
+            # on or after the new row) and never ran at all for buy rejects. A
+            # yield reject is not lot-affecting, so the recompute is a harmless
+            # no-op for it.
+            await recompute_fifo_for_pair(
+                session,
+                payload.account_id,
+                rtxn.instrument_id,
+            )
 
             rejected_txn_ids.append(reject_txn.id)
     finally:

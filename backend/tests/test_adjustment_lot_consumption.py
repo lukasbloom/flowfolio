@@ -17,11 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core import clock
 from app.core.database import Base
 from app.models import Account, Instrument, LotAlloc, Transaction
+from app.schemas.reconciliation import (
+    DriftDecision,
+    HoldingSnapshotEntry,
+    ReconciliationCreate,
+    RejectedTxnPayload,
+)
 from app.services.contributions import get_cost_basis_series
 from app.services.cost_basis import _load_allocations, _open_lots_at
 from app.services.fifo import match_lots_for_sell, recompute_fifo_for_pair
 from app.services.networth import get_networth_series
 from app.services.realized import get_realized_per_holding
+from app.services.reconciliation import save_event
 
 
 @pytest_asyncio.fixture
@@ -288,3 +295,131 @@ async def _realized_for_instrument(session: AsyncSession, instrument_id: str) ->
         if row.instrument_id == instrument_id:
             return row.realized_eur
     return Decimal("0")
+
+
+# ---------------------------------------------------------------------------
+# Plan 015: reconciliation lot insertions must recompute the WHOLE pair, not a
+# date-scoped subset. The old after_date=snapshot_date scope skipped earlier
+# disposals holding a lot dated on or after the new row, and the reject-buy path
+# never recomputed at all.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_accept_topup_reattributes_earlier_sell_full_pair(session):
+    """Repro 4a: buy B(50)@20 on 2024-06-01, sell S(50)@30 on 2024-05-01 (S draws
+    from B, the only lot). An accept top-up writes a +50 adjustment on 2024-05-15,
+    a lot dated BEFORE B but AFTER the sell. Canonical FIFO moves the sell onto the
+    earlier adjustment lot (no price -> realized gain None). The old
+    snapshot_date-scoped recompute skipped the sell (dated before the snapshot)
+    and left it on B."""
+    acct_id, inst_id = await _seed_account_instrument(session)
+    buy_b = await _make_buy(
+        session, acct_id, inst_id, Decimal("50"), date(2024, 6, 1), unit_price=Decimal("20")
+    )
+    sell = await _make_sell(
+        session, acct_id, inst_id, Decimal("50"), date(2024, 5, 1), unit_price=Decimal("30")
+    )
+    await match_lots_for_sell(session, sell)
+    await session.flush()
+
+    # Precondition: the sell draws entirely from B.
+    pre = (
+        await session.execute(select(LotAlloc).where(LotAlloc.sell_txn_id == sell.id))
+    ).scalars().all()
+    assert {a.buy_txn_id for a in pre} == {buy_b.id}
+
+    payload = ReconciliationCreate(
+        account_id=acct_id,
+        snapshot_date=date(2024, 5, 15),
+        notes=None,
+        holdings=[HoldingSnapshotEntry(instrument_id=inst_id, snapshot_qty=Decimal("50"))],
+        decisions=[DriftDecision(instrument_id=inst_id, action="accept")],
+    )
+    await save_event(session, payload)
+
+    adj = (
+        await session.execute(
+            select(Transaction).where(
+                Transaction.instrument_id == inst_id,
+                Transaction.txn_type == "adjustment",
+            )
+        )
+    ).scalar_one()
+    assert adj.quantity == Decimal("50")  # snapshot 50 - app 0 = +50 top-up
+
+    post = (
+        await session.execute(select(LotAlloc).where(LotAlloc.sell_txn_id == sell.id))
+    ).scalars().all()
+    assert len(post) == 1
+    assert post[0].buy_txn_id == adj.id
+    assert post[0].quantity == Decimal("50")
+    # The adjustment lot carries no price, so the sell's alloc has no realized gain.
+    assert post[0].realized_gain_eur is None
+
+
+@pytest.mark.asyncio
+async def test_reject_buy_reattributes_existing_sell_full_pair(session):
+    """Repro 4b: buy A(100)@10 on 2024-05-01, sell S(100)@30 on 2024-05-10 (->A,
+    gain 2000). A reject-buy records a forgotten back-dated lot new(50)@20 on
+    2024-01-01 (drift = snapshot 50 - app 0). Canonical FIFO splits the sell:
+    new(50) gain 500 + A(50) gain 1000 = 1500. The reject-buy path used to insert
+    the lot with no recompute, leaving the sell fully on A at gain 2000."""
+    acct_id, inst_id = await _seed_account_instrument(session)
+    buy_a = await _make_buy(
+        session, acct_id, inst_id, Decimal("100"), date(2024, 5, 1), unit_price=Decimal("10")
+    )
+    sell = await _make_sell(
+        session, acct_id, inst_id, Decimal("100"), date(2024, 5, 10), unit_price=Decimal("30")
+    )
+    await match_lots_for_sell(session, sell)
+    await session.flush()
+
+    # Precondition: the sell draws entirely from A (gain 2000).
+    pre = (
+        await session.execute(select(LotAlloc).where(LotAlloc.sell_txn_id == sell.id))
+    ).scalars().all()
+    assert {a.buy_txn_id for a in pre} == {buy_a.id}
+    assert sum(a.quantity for a in pre) == Decimal("100")
+
+    payload = ReconciliationCreate(
+        account_id=acct_id,
+        snapshot_date=date(2024, 6, 1),
+        notes=None,
+        holdings=[HoldingSnapshotEntry(instrument_id=inst_id, snapshot_qty=Decimal("50"))],
+        decisions=[DriftDecision(instrument_id=inst_id, action="reject")],
+        rejected_txns=[
+            RejectedTxnPayload(
+                instrument_id=inst_id,
+                txn_type="buy",
+                txn_date=date(2024, 1, 1),
+                unit_price=Decimal("20"),
+                price_currency="EUR",
+                fee_eur=Decimal("0"),
+            )
+        ],
+    )
+    await save_event(session, payload)
+
+    new_buy = (
+        await session.execute(
+            select(Transaction).where(
+                Transaction.instrument_id == inst_id,
+                Transaction.txn_type == "buy",
+                Transaction.date == date(2024, 1, 1),
+            )
+        )
+    ).scalar_one()
+    assert new_buy.quantity == Decimal("50")  # abs(snapshot 50 - app 0)
+
+    post = {
+        a.buy_txn_id: a
+        for a in (
+            await session.execute(
+                select(LotAlloc).where(LotAlloc.sell_txn_id == sell.id)
+            )
+        ).scalars().all()
+    }
+    assert set(post) == {new_buy.id, buy_a.id}
+    assert post[new_buy.id].quantity == Decimal("50")
+    assert post[new_buy.id].realized_gain_eur == Decimal("500")  # (30 - 20) * 50
+    assert post[buy_a.id].quantity == Decimal("50")
+    assert post[buy_a.id].realized_gain_eur == Decimal("1000")  # (30 - 10) * 50

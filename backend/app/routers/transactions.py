@@ -29,6 +29,7 @@ from app.services.fifo import (
     match_lots_for_sell,
     recompute_fifo_for_pair,
 )
+from app.services.fifo_convergence import recompute_pair_if_competing_disposal
 from app.services.fx import get_or_fetch_fx_rate
 
 router = APIRouter(prefix="/api/transactions", tags=["transactions"])
@@ -83,15 +84,22 @@ async def _release_and_recompute_for_deleted(
     """Release the lot allocations a just-soft-deleted txn is involved in and
     re-run FIFO for its pair.
 
-    A txn that consumed lots (a sell, a spend, or a downward adjustment) only
-    releases its own sell-side allocs (freeing lots never breaks coverage). A
-    buy or an upward adjustment that later sells consumed releases those
-    buy-side allocs and re-matches the pair. If the remaining open lots can no
-    longer cover those sells, recompute_fifo_for_pair raises ValueError (caller
-    maps to 422).
+    A txn that consumed lots (a sell, a spend, or a downward adjustment) releases
+    its own sell-side allocs and then re-matches the whole pair so later
+    disposals move onto the lots it freed (plan 015). A buy or an upward
+    adjustment that later sells consumed releases those buy-side allocs and
+    re-matches the pair. If the remaining open lots can no longer cover those
+    sells, recompute_fifo_for_pair raises ValueError (caller maps to 422). A
+    disposal delete only ever grows availability, so its recompute cannot uncover
+    a remaining sell.
     """
     if await _owns_sell_side_allocs(db, txn.id):
+        # Free this disposal's lots, then converge the pair to canonical FIFO so
+        # later disposals rematch onto the freed lots instead of keeping their
+        # newer-lot attribution.
         await delete_lot_allocs_for_sell(db, txn.id)
+        await db.flush()
+        await recompute_fifo_for_pair(db, txn.account_id, txn.instrument_id)
         return
     if txn.txn_type in ("buy", "adjustment"):
         consumed = await db.execute(
@@ -170,6 +178,27 @@ async def create_transaction(body: TransactionCreate, db: AsyncSession = Depends
     if body.txn_type == "spend":
         try:
             await match_lots_for_sell(db, txn)
+        except ValueError as exc:
+            await db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    # Canonical FIFO convergence on the create path (plan 015). A back-dated buy
+    # or upward adjustment can precede lots that existing disposals already
+    # consumed, and a back-dated disposal self-matches against availability that
+    # other disposals' allocs contaminate. Both change attribution, so re-match
+    # the whole pair in canonical (date asc, created_at asc) order whenever the
+    # new row is lot-affecting AND any OTHER disposal (sell/spend) or downward
+    # adjustment exists on the pair. There is no date bound: match_lots_for_sell
+    # ignores lot dates, so an EARLIER-dated disposal can hold a lot dated on or
+    # after the new row too. Adding a lot or clearing a self-match contaminant
+    # never uncovers a sell, so a create that succeeded above cannot start 422ing
+    # here.
+    lot_affecting = body.txn_type in (DISPOSAL_TXN_TYPES | {"buy", "adjustment"})
+    if lot_affecting:
+        try:
+            await recompute_pair_if_competing_disposal(
+                db, txn.account_id, txn.instrument_id, txn.id
+            )
         except ValueError as exc:
             await db.rollback()
             raise HTTPException(status_code=422, detail=str(exc))
@@ -397,15 +426,23 @@ async def update_transaction(
     is_sell_now = txn.txn_type in DISPOSAL_TXN_TYPES
     affects_lots = is_sell_now or txn.txn_type in ("buy", "adjustment")
     if affects_lots and (_FIFO_RELEVANT_FIELDS & update_data.keys()):
-        # Release any sell-side allocs this txn already owns before the pair
-        # rematch. A sell/spend always owns them, a downward adjustment does too,
-        # and an edit that flips its quantity to positive must clear those stale
-        # allocs here, since the now-positive row no longer qualifies as a
-        # disposal for recompute_fifo_for_pair to rematch and so would otherwise
-        # leave them orphaned.
-        if await _owns_sell_side_allocs(db, txn.id):
-            await delete_lot_allocs_for_sell(db, txn.id)
         await db.flush()
+        # A downward adjustment edited into a positive top-up flips from a lot
+        # CONSUMER to a lot SOURCE. recompute_fifo_for_pair only clears and
+        # rematches rows that are STILL disposals, so it skips this row and would
+        # leave its trim-era sell-side allocs in place, then rematch every other
+        # disposal against that contaminated availability (plan 015 flip-ordering
+        # fix). Clear those stale allocs BEFORE the recompute so the pair
+        # converges to canonical FIFO and the same PUT stays idempotent.
+        if (
+            txn.txn_type == "adjustment"
+            and txn.quantity >= Decimal("0")
+            and await _owns_sell_side_allocs(db, txn.id)
+        ):
+            await delete_lot_allocs_for_sell(db, txn.id)
+            await db.flush()
+        # The pair recompute clears and rematches every row that stays a disposal,
+        # so the old unconditional pre-release was redundant (plan 015 drops it).
         try:
             await recompute_fifo_for_pair(db, txn.account_id, txn.instrument_id)
         except ValueError as exc:
