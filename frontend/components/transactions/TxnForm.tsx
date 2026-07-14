@@ -306,7 +306,20 @@ export function TxnForm({ initialValues, txnId, onSuccess, hideTypeSelect, onCan
           render={({ field }) => (
             <FormItem>
               <FormLabel>Currency</FormLabel>
-              <Select onValueChange={field.onChange} value={field.value}>
+              <Select
+                onValueChange={(v) => {
+                  // Flipping currency invalidates any prefilled or typed FX rate
+                  // (e.g. the locked "1" identity rate from an EUR row), so clear
+                  // it. The payload then omits fx_rate_to_eur and the backend
+                  // re-locks the correct rate instead of honoring a stale
+                  // explicit override.
+                  if (v !== field.value) {
+                    form.setValue("fx_rate_to_eur", "", { shouldDirty: true });
+                  }
+                  field.onChange(v);
+                }}
+                value={field.value}
+              >
                 <FormControl>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                 </FormControl>
