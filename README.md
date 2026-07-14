@@ -40,6 +40,20 @@ docker compose up -d
 
 If `DOMAIN` is set in your `.env`, Caddy serves your instance over HTTPS on ports 80 and 443 with certificates obtained automatically from Let's Encrypt. If `DOMAIN` is left unset, the app is served over plain HTTP on port 8080 for any hostname, which covers both a local trial at http://localhost:8080 and running behind your own reverse proxy that already terminates TLS. In the reverse-proxy case, just point your proxy at the container's port 8080; the app defaults to production hardening, so no extra configuration is needed.
 
+### Fronting with Apache (or another TLS-terminating proxy) and HSTS
+
+When you put Flowfolio behind a proxy that terminates TLS itself (Apache, for example) and forwards plain HTTP to the container, the internal hop is HTTP, so Caddy's `@secure` matcher (which only fires on an HTTPS request) never sends the `Strict-Transport-Security` header. Your proxy needs to send it instead. For Apache, that is one directive:
+
+```apache
+Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+```
+
+Verify it reaches browsers after deploying:
+
+```bash
+curl -sI https://<your-host>/ | grep -i strict-transport
+```
+
 To kick the tyres without cloning anything, you can run the published image directly:
 
 ```bash
