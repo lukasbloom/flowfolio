@@ -306,6 +306,177 @@ async def test_update_buy_rejects_explicit_unit_price_clear(client_and_session):
 
 
 @pytest.mark.asyncio
+async def test_update_buy_rejects_negative_quantity(client_and_session):
+    """PUT mirrors TransactionCreate.validate_quantity: a negative quantity
+    on a buy is nonsense (the sign is inferred from txn_type), so it's
+    rejected with 422 and the row stays unchanged."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2024-01-15",
+            "quantity": "5",
+            "unit_price": "100",
+            "price_currency": "USD",
+            "fx_rate_to_eur": "1.1",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+
+    bad = await client.put(f"/api/transactions/{txn_id}", json={"quantity": "-5"})
+    assert bad.status_code == 422
+    assert "quantity" in bad.text
+
+    async with maker() as session:
+        from app.models.transaction import Transaction as Txn
+
+        result = await session.execute(select(Txn).where(Txn.id == txn_id))
+        txn = result.scalar_one()
+    assert txn.quantity == Decimal("5")
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        allocs = result.scalars().all()
+    assert len(allocs) == 0
+
+
+@pytest.mark.asyncio
+async def test_update_sell_rejects_negative_quantity(client_and_session):
+    """A sell's PUT quantity uses the same positive input convention as a
+    buy, the router negates it internally. A negative input is the input
+    convention being violated, not a legal sell, so it's rejected."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2024-01-01",
+            "quantity": "10",
+            "unit_price": "1000",
+            "price_currency": "USD",
+            "fx_rate_to_eur": "1.1",
+        },
+    )
+
+    from app.models.transaction import Transaction as Txn
+    from app.services.fifo import match_lots_for_sell
+
+    async with maker() as session:
+        sell_txn = Txn(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="sell",
+            date=date(2024, 6, 1),
+            quantity=Decimal("-4"),
+            unit_price=Decimal("1500"),
+            price_currency="USD",
+            fx_rate_to_eur=Decimal("1.08"),
+        )
+        session.add(sell_txn)
+        await session.flush()
+        await match_lots_for_sell(session, sell_txn)
+        await session.commit()
+        sell_id = sell_txn.id
+
+    bad = await client.put(f"/api/transactions/{sell_id}", json={"quantity": "-4"})
+    assert bad.status_code == 422
+    assert "quantity" in bad.text
+
+    async with maker() as session:
+        result = await session.execute(select(LotAlloc))
+        allocs = result.scalars().all()
+    assert len(allocs) == 1
+    assert allocs[0].quantity == Decimal("4")
+
+
+@pytest.mark.asyncio
+async def test_update_buy_rejects_zero_quantity(client_and_session):
+    """Zero mirrors whatever the create path does: TransactionCreate.validate_quantity
+    rejects `v <= 0`, so zero is rejected the same as negative."""
+    client, _ = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    create_resp = await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2024-01-15",
+            "quantity": "5",
+            "unit_price": "100",
+            "price_currency": "USD",
+            "fx_rate_to_eur": "1.1",
+        },
+    )
+    assert create_resp.status_code == 201
+    txn_id = create_resp.json()["id"]
+
+    bad = await client.put(f"/api/transactions/{txn_id}", json={"quantity": "0"})
+    assert bad.status_code == 422
+    assert "quantity" in bad.text
+
+
+@pytest.mark.asyncio
+async def test_update_adjustment_allows_negative_and_positive_quantity(client_and_session):
+    """Adjustments are the deliberate exception: reconciliation trims are
+    negative, top-ups positive, and the sign-flip edit path is legitimate.
+    The quantity-sign guard must skip adjustment rows entirely, so both a
+    negative and a positive PUT stay 200."""
+    client, maker = client_and_session
+    acct_id, inst_id = await _create_account_and_instrument(client)
+    await client.post(
+        "/api/transactions",
+        json={
+            "account_id": acct_id,
+            "instrument_id": inst_id,
+            "txn_type": "buy",
+            "date": "2024-01-01",
+            "quantity": "10",
+            "unit_price": "1000",
+            "price_currency": "USD",
+            "fx_rate_to_eur": "1.1",
+        },
+    )
+
+    from app.models.transaction import Transaction as Txn
+    from app.services.fifo import recompute_fifo_for_pair
+
+    async with maker() as session:
+        adj = Txn(
+            account_id=acct_id,
+            instrument_id=inst_id,
+            txn_type="adjustment",
+            date=date(2024, 2, 1),
+            quantity=Decimal("-3"),
+            unit_price=None,
+            price_currency=None,
+            fx_rate_to_eur=None,
+            cost_basis_eur=None,
+            fee_eur=Decimal("0"),
+            source="adjustment",
+        )
+        session.add(adj)
+        await session.flush()
+        await recompute_fifo_for_pair(session, acct_id, inst_id)
+        await session.commit()
+        adj_id = adj.id
+
+    neg = await client.put(f"/api/transactions/{adj_id}", json={"quantity": "-6"})
+    assert neg.status_code == 200, neg.text
+
+    pos = await client.put(f"/api/transactions/{adj_id}", json={"quantity": "3"})
+    assert pos.status_code == 200, pos.text
+
+
+@pytest.mark.asyncio
 async def test_update_sell_recomputes_fifo(client_and_session):
     """PUT on a sell deletes old lot_allocs and re-runs FIFO with the new quantity.
     Sell created via session (bare sells rejected at API level).

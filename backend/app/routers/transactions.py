@@ -369,6 +369,22 @@ async def update_transaction(
                 ),
             )
 
+    # Mirror TransactionCreate.validate_quantity: quantity is user-facing and
+    # always positive, the router infers the stored sign from txn_type.
+    # Adjustment is the deliberate exception (reconciliation trims are
+    # negative, top-ups positive, sign-flip edits are legitimate and
+    # convergence-tested), so it skips this check entirely.
+    if (
+        "quantity" in update_data
+        and update_data["quantity"] is not None
+        and txn.txn_type != "adjustment"
+        and update_data["quantity"] <= Decimal("0")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="quantity must be positive (sign is inferred from txn_type)",
+        )
+
     # Capture before-snapshot for audit diff (BEFORE mutating txn)
     before_snapshot: dict = {field: getattr(txn, field, None) for field in AUDITED_FIELDS}
 
