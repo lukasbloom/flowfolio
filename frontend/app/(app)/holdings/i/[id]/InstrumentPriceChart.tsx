@@ -21,8 +21,8 @@ import { formatMoney, formatQuantity, decimalsFor } from "@/lib/format";
 import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
-import { ACCENT, BORDER, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
-import { escapeHtml, toIsoDate } from "@/lib/chart-utils";
+import { ACCENT, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
+import { escapeHtml, timeXAxis, toIsoDate, tooltipShell, valueYAxis } from "@/lib/chart-utils";
 import { aggregateInstrument } from "@/lib/instrument-aggregation";
 import { useOpenPerf } from "@/hooks/useOpenPerf";
 import type { NwTimeframe } from "@/components/networth/timeframe";
@@ -349,40 +349,14 @@ export function InstrumentPriceChart({
         color: MUTED,
       },
       grid: { left: 12, right: 12, top: showCostLine ? 32 : 24, bottom: 32, containLabel: true },
-      xAxis: {
-        type: "time",
-        minInterval: xAxisMinInterval,
-        axisLine: { lineStyle: { color: BORDER } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: MUTED,
-          fontSize: 12,
-          hideOverlap: true,
-          interval: "auto",
-          formatter: xAxisLabelFormatter,
-        },
-        splitLine: { show: false },
-      },
+      xAxis: timeXAxis({ minInterval: xAxisMinInterval, formatter: xAxisLabelFormatter }),
       yAxis: {
-        type: "value",
+        ...valueYAxis((val: number) => formatMoney(val, chartCurrency)),
         position: "left",
         scale: true, // price ranges rarely include zero; let the axis breathe
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: {
-          color: MUTED,
-          fontSize: 12,
-          formatter: (val: number) => formatMoney(val, chartCurrency),
-        },
-        splitLine: { lineStyle: { color: BORDER, type: "dashed" } },
       },
       tooltip: {
-        trigger: "axis",
-        backgroundColor: "#FFFFFF",
-        borderColor: BORDER,
-        borderWidth: 1,
-        textStyle: { color: ACCENT, fontSize: 14, fontFamily: "Inter, system-ui, sans-serif" },
-        padding: [8, 12],
+        ...tooltipShell("axis"),
         axisPointer: { type: "line", lineStyle: { color: MUTED, type: "dashed" } },
         formatter: (params: unknown) => {
           const arr = Array.isArray(params) ? params : [params];
