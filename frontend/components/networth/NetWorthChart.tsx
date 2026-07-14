@@ -26,8 +26,8 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { NwTimeframe } from "@/components/networth/timeframe";
 import { CustomRangeEmpty } from "@/components/charts/CustomRangeEmpty";
-import { ACCENT, BORDER, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
-import { escapeHtml, toIsoDate } from "@/lib/chart-utils";
+import { ACCENT, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
+import { escapeHtml, timeXAxis, toIsoDate, tooltipShell, valueYAxis } from "@/lib/chart-utils";
 
 interface InstrumentLite {
   id: string;
@@ -349,48 +349,18 @@ export function NetWorthChart({
       // with the chart line. 24 → 32 mirrors the value used by the
       // legacy CostBasisOverlay.
       grid: { left: 12, right: 12, top: hasCostBasis ? 32 : 24, bottom: 32, containLabel: true },
-      xAxis: {
-        type: "time",
-        minInterval: xAxisMinInterval,
-        axisLine: { lineStyle: { color: BORDER } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: MUTED,
-          fontSize: 12,
-          hideOverlap: true,
-          interval: "auto",
-          formatter: xAxisLabelFormatter,
-        },
-        splitLine: { show: false },
-      },
+      xAxis: timeXAxis({ minInterval: xAxisMinInterval, formatter: xAxisLabelFormatter }),
       yAxis: {
-        type: "value",
+        ...valueYAxis((val: number) => formatCompactMoney(val, currency)),
         position: "left",
         // Auto-fit to the data range instead of anchoring at 0,
         // so the portfolio line uses the full plot area (intra-period changes
         // become visually legible even when the portfolio value is, say, ~50k–60k
         // and would otherwise be squashed into the top sliver of a 0-based axis).
         scale: true,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        axisLabel: {
-          color: MUTED,
-          fontSize: 12,
-          formatter: (val: number) => formatCompactMoney(val, currency),
-        },
-        splitLine: { lineStyle: { color: BORDER, type: "dashed" } },
       },
       tooltip: {
-        trigger: "axis",
-        backgroundColor: "#FFFFFF",
-        borderColor: BORDER,
-        borderWidth: 1,
-        textStyle: {
-          color: ACCENT,
-          fontSize: 14,
-          fontFamily: "Inter, system-ui, sans-serif",
-        },
-        padding: [8, 12],
+        ...tooltipShell("axis"),
         axisPointer: { type: "line", lineStyle: { color: MUTED, type: "dashed" } },
         // Build tooltip from trusted enum/type fields only (no raw notes)
         // to mitigate tooltip XSS.
