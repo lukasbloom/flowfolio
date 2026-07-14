@@ -124,6 +124,26 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
             "A default SECRET_KEY lets anyone forge session tokens."
         )
 
+    # Refuse a sub-32-char SECRET_KEY in production. PyJWT raises
+    # InsecureKeyLengthWarning below that floor because a short HS256 key
+    # weakens every session token it signs, and the check above only refuses
+    # the published default, not an operator-chosen five-character key.
+    # Empty/unset stays governed by the default-value check above.
+    # ensure_secret_key runs before this guard and always auto-generates a
+    # 32+ byte key, so only a truthy, too-short, non-default value trips this
+    # check. Mirrors the APP_PASSWORD floor below.
+    if (
+        settings.app_env == "production"
+        and settings.secret_key
+        and len(settings.secret_key) < 32
+    ):
+        raise RuntimeError(
+            "SECRET_KEY is shorter than 32 characters. A short HS256 key "
+            "weakens every session token. Generate a strong one with: "
+            'python -c "import secrets; print(secrets.token_urlsafe(48))" '
+            "and set it in .env."
+        )
+
     # Refuse a sub-8-char APP_PASSWORD in production. The interactive setup and
     # the pre-seed both enforce this floor; this catches the case where the DB
     # is already claimed but the operator keeps a weak APP_PASSWORD in the env

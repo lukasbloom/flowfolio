@@ -97,7 +97,7 @@ def _guard_settings(**overrides):
     base = dict(
         app_env="production",
         fixed_now=None,
-        secret_key="a-strong-random-secret",
+        secret_key="a-strong-random-secret-at-least-32-chars-long",
         app_password=None,
         demo_mode=False,
     )
@@ -155,6 +155,36 @@ def test_guard_still_rejects_default_secret_even_when_demo():
         assert_production_safety(
             _guard_settings(secret_key="change-me-in-production", demo_mode=True)
         )
+
+
+def test_guard_rejects_sub_32_char_secret_key_in_production():
+    """A truthy SECRET_KEY one character under the floor must be refused."""
+    with pytest.raises(RuntimeError, match="shorter than 32 characters"):
+        assert_production_safety(_guard_settings(secret_key="x" * 31))
+
+
+def test_guard_allows_32_char_secret_key_in_production():
+    """Exactly 32 characters clears the floor."""
+    assert assert_production_safety(_guard_settings(secret_key="x" * 32)) is None
+
+
+def test_guard_allows_empty_secret_key_in_production():
+    """compose.yml's SECRET_KEY=${SECRET_KEY:-} arrives as an empty string, not
+    None, on an unset host var. That is the unclaimed, auto-generate state
+    (ensure_secret_key runs before this guard) and must pass the length floor
+    the same way the default literal already does, mirroring
+    test_guard_allows_empty_app_password_in_production."""
+    assert assert_production_safety(_guard_settings(secret_key="")) is None
+
+
+def test_guard_allows_short_secret_key_in_development():
+    """The floor is a production-only guard, dev trials keep working."""
+    assert (
+        assert_production_safety(
+            _guard_settings(app_env="development", secret_key="x" * 31)
+        )
+        is None
+    )
 
 
 def test_guard_rejects_sub_8_char_app_password_in_production():
