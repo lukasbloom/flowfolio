@@ -20,6 +20,12 @@
 #   }
 
 {$DOMAIN::8080} {
+    # HSTS only over TLS: in the DOMAIN-set mode every response is HTTPS and
+    # gets the header; in the plain-HTTP :8080 mode the matcher never fires
+    # (browsers ignore HSTS over HTTP anyway, this keeps local trials clean).
+    @secure protocol https
+    header @secure Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
     # Security headers applied to every response. No full CSP yet — Next.js
     # inline scripts make a strict CSP a tuning project of its own (deferred).
     header {
