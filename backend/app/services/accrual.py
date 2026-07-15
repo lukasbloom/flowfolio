@@ -48,7 +48,7 @@ async def _get_balance_through(
     """Sum signed quantity through and including through_date.
 
     quantity is TEXT-backed (DecimalText) — sum in Python; a SQL SUM would
-    coerce the text values back to float (see plan 006).
+    coerce the text values back to float.
     """
     stmt = select(Transaction.quantity).where(
         Transaction.account_id == account_id,

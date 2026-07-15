@@ -216,7 +216,7 @@ async def calculate_open_lot_basis_batch(
     """
     # 1. All buy/adjustment lots, ordered so each per-(acct,inst) bucket inherits
     #    the (date asc, created_at asc) order the per-holding query used. The
-    #    quantity>0 sign filter moves to Python (TEXT column — see plan 006).
+    #    quantity>0 sign filter moves to Python (TEXT column).
     buy_stmt = (
         select(Transaction)
         .where(

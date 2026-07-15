@@ -28,7 +28,7 @@ async def get_realized_per_holding(
 ) -> list[RealizedPerHolding]:
     # realized_gain_eur is TEXT-backed (DecimalText) — fetch the raw per-alloc
     # values and sum per instrument in Python; a SQL SUM would coerce the text
-    # back to float (see plan 006). The GROUP BY collapses to a Python reduce.
+    # back to float. The GROUP BY collapses to a Python reduce.
     stmt = (
         select(
             Transaction.instrument_id,

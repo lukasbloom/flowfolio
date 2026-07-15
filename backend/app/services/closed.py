@@ -171,7 +171,7 @@ async def _closed_holding_set(session: AsyncSession) -> set[tuple[str, str]]:
     # quantity is TEXT-backed (DecimalText) — sum per (account, instrument) in
     # Python and apply the closed (== ZERO) predicate there. A SQL SUM/HAVING
     # would do float arithmetic on the text values and the float dust could
-    # make a fully-closed position look open (see plan 006).
+    # make a fully-closed position look open.
     stmt = (
         select(
             Transaction.account_id,
@@ -194,7 +194,7 @@ async def _last_closed_dates_batch(
     """Batched last-activity ("closed on") date per (account, instrument),
     restricted to the closed set: max(date) over sell/spend disposals plus
     DOWNWARD (negative-quantity) adjustments, deleted_at IS NULL. A negative
-    reconciliation trim closes a position exactly like a sale (plan 018), so
+    reconciliation trim closes a position exactly like a sale, so
     it must supply the closed date even when the holding has no sell/spend
     row at all. Upward adjustments are lot sources, not closures, and stay
     excluded. quantity is TEXT-backed (DecimalText), so the adjustment sign
@@ -279,7 +279,7 @@ async def _buy_basis_and_qty_batch(
     # cost_basis_eur / quantity are TEXT-backed (DecimalText) — sum in Python.
     # The qty>0 sign filter moves to Python; cost_basis_eur=NULL (adjustments)
     # contributes 0, matching the old coalesce semantics. A SQL SUM/HAVING
-    # would coerce the text values to float (see plan 006).
+    # would coerce the text values to float.
     stmt = (
         select(
             Transaction.account_id,
@@ -319,7 +319,7 @@ async def _realized_gains_batch(
         return {}
     # realized_gain_eur is TEXT-backed — fetch raw per-alloc values and sum per
     # holding in Python. SQL SUM ignores NULLs; we skip None to match. A SQL
-    # SUM would coerce the text values back to float (see plan 006).
+    # SUM would coerce the text values back to float.
     stmt = (
         select(
             Transaction.account_id,

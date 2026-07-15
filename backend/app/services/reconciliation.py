@@ -110,9 +110,8 @@ async def build_preview(
         for inst in (await session.execute(inst_stmt)).scalars().all()
     }
 
-    # 3. Load price quotes + FX rates as-of snapshot_date.
-    # _load_quotes returns dict[str, list[PriceQuote]] keyed by instrument_id.
-    # _load_fx returns dict[date, Decimal] of EUR-base rates (USD per 1 EUR).
+    # 3. Load price quotes ({instrument_id: [QuoteRow]}) + FX rates
+    # ({date: EUR-base rate}) as-of snapshot_date.
     quotes_by_instrument = await load_quotes(session, snapshot_date)
     fx_by_date = await load_fx(session, snapshot_date)
 
@@ -260,11 +259,9 @@ async def save_event(
                     f"app {app_qty} → actual {snapshot_qty}"
                 ),
             )
-            # Re-match the whole pair in canonical FIFO order (plan 015). The old
-            # snapshot_date-scoped recompute only re-ran disposals dated on or
-            # after the snapshot, so a back-dated adjustment that changes which
-            # lot an EARLIER sell should draw from left that sell on stale
-            # attribution. A pair-wide recompute is the only sound scope.
+            # Converge the pair to canonical FIFO. A back-dated adjustment can
+            # change which lot an EARLIER sell should draw from, so a
+            # pair-wide recompute is the only sound scope.
             await recompute_fifo_for_pair(
                 session,
                 payload.account_id,
