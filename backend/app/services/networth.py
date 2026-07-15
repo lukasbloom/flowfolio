@@ -5,16 +5,26 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import case, func, null, select
+from sqlalchemy import func, null, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.core.constants import TIMEFRAMES as _BASE_TIMEFRAMES
 from app.core.constants import VALUE_SCALE, ZERO
-from app.models import FxRate, HoldingTag, Instrument, PriceQuote, Tag, Transaction
-from app.services.cost_basis import _load_allocations, _open_lots_at
+from app.models import HoldingTag, Instrument, Tag, Transaction
+from app.services.cost_basis import (
+    _load_allocations,
+    _open_lots_at,
+    lot_consuming_txn_ids,
+)
 from app.services.date_cursor import ForwardCursor
-from app.services.quotes import MissingFxRateError, QuoteRow, convert
+from app.services.quotes import (
+    MissingFxRateError,
+    convert,
+    fx_on_or_before,
+    load_fx,
+    load_quotes,
+)
 
 # networth's value/cost-basis quantization scale (1e-8). Aliased from the
 # centralized VALUE_SCALE; the historical local name UNIT_SCALE is retained.
@@ -24,10 +34,7 @@ UNIT_SCALE = VALUE_SCALE
 # in app.core.constants is not mutated.
 TIMEFRAMES = {**_BASE_TIMEFRAMES, "custom": None}
 
-# MissingFxRateError now lives in app.services.quotes (unified with perf's
-# formerly-separate but behaviorally identical class); re-exported here so any
-# `from app.services.networth import MissingFxRateError` import keeps working.
-__all__ = ["MissingFxRateError", "get_networth_series", "aggregate_points", "build_markers"]
+__all__ = ["get_networth_series", "aggregate_points", "build_markers"]
 
 
 @dataclass(frozen=True)
@@ -79,7 +86,6 @@ async def get_networth_series(
     display_currency: str,
     start: date | None = None,
     end: date | None = None,
-    instrument_id: str | None = None,
     instrument_ids: list[str] | None = None,
     tag_filter: str | None = None,
     include_cost_basis: bool = False,
@@ -89,13 +95,8 @@ async def get_networth_series(
     if display_currency not in {"EUR", "USD"}:
         raise ValueError(f"unsupported display currency: {display_currency}")
 
-    # Accept either the legacy single `instrument_id` (kept
-    # for backward compat with any in-tree callers) or the new
-    # `instrument_ids` list. Normalize to a single list of strings; an empty
-    # list means "no filter" (full portfolio).
+    # An empty list means "no filter" (full portfolio).
     effective_ids: list[str] = list(instrument_ids or [])
-    if instrument_id is not None and instrument_id not in effective_ids:
-        effective_ids.append(instrument_id)
 
     range_start, range_end = await _resolve_range(
         session,
@@ -112,8 +113,8 @@ async def get_networth_series(
         session, range_end, instrument_ids=effective_ids, tag_filter=tag_filter
     )
     instruments = await _load_instruments(session)
-    quotes_by_instrument = await _load_quotes(session, range_end)
-    fx_by_date = await _load_fx(session, range_end)
+    quotes_by_instrument = await load_quotes(session, range_end)
+    fx_by_date = await load_fx(session, range_end)
 
     # Index priced transactions per instrument so the replay can fall
     # back to a buy/sell unit_price when no real PriceQuote exists yet (e.g.
@@ -137,18 +138,9 @@ async def get_networth_series(
     cost_basis_allocations: list = []
     if include_cost_basis:
         cost_basis_buys = [txn for txn in transactions if txn.txn_type == "buy"]
-        # Downward adjustments consume open lots (plan 008), so their allocs must
-        # feed _open_lots_at like sell/spend allocs do. Omitting them leaves the
-        # trimmed quantity counted as still-open basis (phantom cost basis). The
-        # downward-only sign filter runs in Python since quantity is TEXT-backed,
-        # mirroring fifo.py's convention.
-        sell_txn_ids = {
-            txn.id
-            for txn in transactions
-            if txn.txn_type in {"sell", "spend"}
-            or (txn.txn_type == "adjustment" and txn.quantity < ZERO)
-        }
-        cost_basis_allocations = await _load_allocations(session, sell_txn_ids)
+        cost_basis_allocations = await _load_allocations(
+            session, lot_consuming_txn_ids(transactions)
+        )
 
     positions: dict[tuple[str, str], Decimal] = defaultdict(lambda: ZERO)
     txn_index = 0
@@ -193,7 +185,7 @@ async def get_networth_series(
     def _buy_rate(buy_date: date) -> Decimal | None:
         if buy_date not in buy_rate_cache:
             try:
-                buy_rate_cache[buy_date] = _fx_on_or_before(fx_by_date, buy_date)
+                buy_rate_cache[buy_date] = fx_on_or_before(fx_by_date, buy_date)
             except MissingFxRateError:
                 buy_rate_cache[buy_date] = None
         return buy_rate_cache[buy_date]
@@ -557,54 +549,6 @@ async def _load_instruments(session: AsyncSession) -> dict[str, Instrument]:
     return {instrument.id: instrument for instrument in result.scalars()}
 
 
-async def _load_quotes(
-    session: AsyncSession, end: date
-) -> dict[str, list[QuoteRow]]:
-    # Select only the columns the day-replay reads, as plain rows, rather than
-    # hydrating full PriceQuote ORM entities (the dominant per-call cost — this
-    # loads thousands of quotes). The custom column types still convert price to
-    # Decimal and date to a python date, so QuoteRow is value-identical to the
-    # former ORM objects for every field consumed here.
-    stmt = (
-        select(
-            PriceQuote.instrument_id,
-            PriceQuote.date,
-            PriceQuote.price,
-            PriceQuote.currency,
-        )
-        .where(PriceQuote.date <= end)
-        .order_by(
-            PriceQuote.instrument_id.asc(),
-            PriceQuote.date.asc(),
-            case((PriceQuote.source == "manual", 1), else_=0).asc(),
-            PriceQuote.fetched_at.asc(),
-        )
-    )
-    result = await session.execute(stmt)
-    quotes_by_instrument: dict[str, list[QuoteRow]] = defaultdict(list)
-    for instrument_id, quote_date, price, currency in result.all():
-        quotes_by_instrument[instrument_id].append(
-            QuoteRow(instrument_id, quote_date, price, currency)
-        )
-    return quotes_by_instrument
-
-
-async def _load_fx(session: AsyncSession, end: date) -> dict[date, Decimal]:
-    stmt = (
-        select(FxRate.date, FxRate.rate)
-        .where(
-            FxRate.base_currency == "EUR",
-            FxRate.quote_currency == "USD",
-            FxRate.date <= end,
-        )
-        .order_by(FxRate.date.asc(), FxRate.fetched_at.asc())
-    )
-    result = await session.execute(stmt)
-    # date-ascending then fetched_at-ascending => latest fetched_at for a given
-    # date wins the dict slot (same last-write-wins as the former scalars loop).
-    return {row_date: rate for row_date, rate in result.all()}
-
-
 def _convert_amount(
     *,
     amount: Decimal,
@@ -618,15 +562,8 @@ def _convert_amount(
     # Load the rate from the in-memory fx_by_date map (networth's batch-loaded
     # FX cache), then delegate the arithmetic to the shared `convert` helper so
     # the EUR<->USD direction logic lives in exactly one place.
-    fx_rate = _fx_on_or_before(fx_by_date, as_of)
+    fx_rate = fx_on_or_before(fx_by_date, as_of)
     return convert(amount, from_currency, to_currency, fx_rate)
-
-
-def _fx_on_or_before(fx_by_date: dict[date, Decimal], as_of: date) -> Decimal:
-    eligible = [fx_date for fx_date in fx_by_date if fx_date <= as_of]
-    if not eligible:
-        raise MissingFxRateError(f"missing EUR/USD FX rate for {as_of.isoformat()}")
-    return fx_by_date[max(eligible)]
 
 
 def _bucket_key(d: date, aggregation: str) -> object:

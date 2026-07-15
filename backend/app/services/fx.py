@@ -33,6 +33,54 @@ logger = logging.getLogger(__name__)
 FRANKFURTER_BASE_URL = "https://api.frankfurter.dev/v1"
 
 
+class FxUpstreamError(Exception):
+    """Raised when an FX rate fetch fails because of an upstream provider
+    issue (Frankfurter unreachable, malformed response). Distinct from
+    ValueError so routers can map it to 502 instead of 422."""
+
+
+async def resolve_locked_fx_rate(
+    session: AsyncSession,
+    price_currency: str | None,
+    on_date: date,
+    explicit_rate: Decimal | None,
+) -> Decimal | None:
+    """Resolve the immutable fx_rate_to_eur to lock on a transaction row.
+
+    The single home for the lock-at-write-time FX convention shared by the
+    transaction create/update paths, linked trades, and reconciliation rejects:
+
+    - EUR: identity rate 1, never calls Frankfurter (an explicit rate is
+      ignored, EUR rows always lock 1).
+    - USD with an explicit rate (broker markup): the explicit rate wins; the
+      ECB rate is still fetched best-effort to warm the fx_rate cache for
+      history charts.
+    - USD without a rate: fetch from Frankfurter and lock it. Upstream failure
+      raises FxUpstreamError.
+    - Anything else (schema layer already rejects it): explicit rate passthrough.
+    """
+    if price_currency == "EUR":
+        return Decimal("1")
+    if price_currency != "USD":
+        return explicit_rate
+    async with httpx.AsyncClient() as client:
+        if explicit_rate is not None:
+            try:
+                await get_or_fetch_fx_rate(
+                    session, client, on_date, base="EUR", quote="USD"
+                )
+            except ValueError:
+                pass  # cache warming is best-effort
+            return explicit_rate
+        try:
+            fx_row = await get_or_fetch_fx_rate(
+                session, client, on_date, base="EUR", quote="USD"
+            )
+        except ValueError as exc:
+            raise FxUpstreamError(str(exc)) from exc
+    return fx_row.rate
+
+
 async def fetch_fx_rate(
     client: httpx.AsyncClient,
     on_date: date,

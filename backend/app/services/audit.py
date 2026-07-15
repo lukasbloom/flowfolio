@@ -5,13 +5,13 @@ Caller-commits contract (mirrors backend/app/services/fifo.py):
     commit). The service stages new rows via session.add(...) but never calls
     session.commit() / session.rollback().
 """
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.transaction import Transaction
 from app.models.txn_audit import TxnAudit
 
 # Fields whose changes are recorded in the audit trail. Listed verbatim so
@@ -45,14 +45,18 @@ def _stringify(value: Any) -> Any:
 
 
 def compute_field_diff(
-    before: Transaction, after_payload: dict[str, Any]
+    before: Mapping[str, Any], after_payload: Mapping[str, Any]
 ) -> dict[str, dict[str, Any]]:
-    """Return {field: {old: stringified, new: stringified}} for fields that actually changed."""
+    """Return {field: {old: stringified, new: stringified}} for fields that actually changed.
+
+    `before` is a plain field snapshot ({field: value} over AUDITED_FIELDS),
+    taken BEFORE the row is mutated.
+    """
     diff: dict[str, dict[str, Any]] = {}
     for field in AUDITED_FIELDS:
         if field not in after_payload:
             continue
-        before_val = getattr(before, field, None)
+        before_val = before.get(field)
         after_val = after_payload[field]
         if _stringify(before_val) != _stringify(after_val):
             diff[field] = {"old": _stringify(before_val), "new": _stringify(after_val)}

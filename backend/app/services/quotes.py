@@ -23,6 +23,7 @@ Behavior-preservation notes:
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from decimal import Decimal
 from typing import NamedTuple, Sequence
@@ -30,6 +31,7 @@ from typing import NamedTuple, Sequence
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import LOT_SOURCE_TXN_TYPES, is_lot_source
 from app.models import Account, FxRate, HoldingTag, Instrument, PriceQuote, Tag, Transaction
 
 
@@ -77,6 +79,68 @@ def convert(
     if from_currency == "USD" and to_currency == "EUR":
         return amount / rate
     raise ValueError(f"unsupported currency conversion: {from_currency}->{to_currency}")
+
+
+async def load_quotes(
+    session: AsyncSession, end: date
+) -> dict[str, list[QuoteRow]]:
+    """Batch-load quotes per instrument through `end` (networth semantics).
+
+    Selects only the columns the day-replay reads, as plain QuoteRow tuples,
+    rather than hydrating full PriceQuote ORM entities (the dominant per-call
+    cost, thousands of quotes per call). Ordering: date asc with manual-source
+    losing the same-date tiebreak, then fetched_at asc. contributions.py keeps
+    its own private variant with an intentionally different manual tiebreak.
+    """
+    stmt = (
+        select(
+            PriceQuote.instrument_id,
+            PriceQuote.date,
+            PriceQuote.price,
+            PriceQuote.currency,
+        )
+        .where(PriceQuote.date <= end)
+        .order_by(
+            PriceQuote.instrument_id.asc(),
+            PriceQuote.date.asc(),
+            case((PriceQuote.source == "manual", 1), else_=0).asc(),
+            PriceQuote.fetched_at.asc(),
+        )
+    )
+    result = await session.execute(stmt)
+    quotes_by_instrument: dict[str, list[QuoteRow]] = defaultdict(list)
+    for instrument_id, quote_date, price, currency in result.all():
+        quotes_by_instrument[instrument_id].append(
+            QuoteRow(instrument_id, quote_date, price, currency)
+        )
+    return quotes_by_instrument
+
+
+async def load_fx(session: AsyncSession, end: date) -> dict[date, Decimal]:
+    """Batch-load EUR/USD rates through `end` as a {date: rate} map.
+
+    date-ascending then fetched_at-ascending, so the latest fetched_at for a
+    given date wins the dict slot (last-write-wins).
+    """
+    stmt = (
+        select(FxRate.date, FxRate.rate)
+        .where(
+            FxRate.base_currency == "EUR",
+            FxRate.quote_currency == "USD",
+            FxRate.date <= end,
+        )
+        .order_by(FxRate.date.asc(), FxRate.fetched_at.asc())
+    )
+    result = await session.execute(stmt)
+    return {row_date: rate for row_date, rate in result.all()}
+
+
+def fx_on_or_before(fx_by_date: dict[date, Decimal], as_of: date) -> Decimal:
+    """At-or-before-date EUR/USD rate from a batch-loaded {date: rate} map."""
+    eligible = [fx_date for fx_date in fx_by_date if fx_date <= as_of]
+    if not eligible:
+        raise MissingFxRateError(f"missing EUR/USD FX rate for {as_of.isoformat()}")
+    return fx_by_date[max(eligible)]
 
 
 def quote_on_or_before(quotes: Sequence[QuoteRow], as_of: date) -> QuoteRow | None:
@@ -216,16 +280,16 @@ async def load_holdings(
 async def first_buy_date(
     session: AsyncSession, account_id: str, instrument_id: str
 ) -> date | None:
-    # quantity is TEXT-backed (DecimalText): the qty>0 sign filter moves to
-    # Python (a SQL comparison would type-juggle the text against a Decimal).
-    # min(date) is computed in Python over the buy/adjustment rows that survive
-    # the sign filter.
-    stmt = select(Transaction.date, Transaction.quantity).where(
+    # Lot-source rows only (sign refinement in Python per core/enums lot
+    # semantics). min(date) is computed in Python over the survivors.
+    stmt = select(
+        Transaction.date, Transaction.txn_type, Transaction.quantity
+    ).where(
         Transaction.account_id == account_id,
         Transaction.instrument_id == instrument_id,
-        Transaction.txn_type.in_(("buy", "adjustment")),
+        Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
         Transaction.deleted_at.is_(None),
     )
     result = await session.execute(stmt)
-    buy_dates = [d for d, qty in result if qty > Decimal("0")]
+    buy_dates = [d for d, t_type, qty in result if is_lot_source(t_type, qty)]
     return min(buy_dates) if buy_dates else None

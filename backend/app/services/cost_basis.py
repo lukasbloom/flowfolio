@@ -18,6 +18,7 @@ boundaries.
 """
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 from typing import Optional
@@ -27,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.constants import ZERO
+from app.core.enums import is_lot_consuming
 from app.models import LotAlloc, Transaction
 
 
@@ -38,6 +40,13 @@ def compute_cost_basis(txn: Transaction) -> Optional[Decimal]:
         return None
     qty = abs(txn.quantity)
     return (qty * txn.unit_price / txn.fx_rate_to_eur).quantize(Decimal("0.00000001"))
+
+
+def lot_consuming_txn_ids(txns: Iterable[Transaction]) -> set[str]:
+    """IDs of the rows whose LotAllocs the open-lot replay must see: sells,
+    spends, and negative adjustments (the lot-consuming set from core/enums).
+    """
+    return {t.id for t in txns if is_lot_consuming(t.txn_type, t.quantity)}
 
 
 async def _load_allocations(

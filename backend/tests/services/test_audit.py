@@ -68,10 +68,15 @@ async def txn_fixture(session: AsyncSession):
     return txn
 
 
+def _snapshot(txn: Transaction) -> dict:
+    """Field snapshot the router builds before mutating a row."""
+    return {field: getattr(txn, field, None) for field in AUDITED_FIELDS}
+
+
 @pytest.mark.asyncio
 async def test_quantity_change_produces_diff(txn_fixture: Transaction):
     """Test 1: Changing quantity produces a diff for that field."""
-    diff = compute_field_diff(txn_fixture, {"quantity": Decimal("1.5")})
+    diff = compute_field_diff(_snapshot(txn_fixture), {"quantity": Decimal("1.5")})
     assert "quantity" in diff
     assert diff["quantity"]["old"] == "1.0"
     assert diff["quantity"]["new"] == "1.5"
@@ -81,7 +86,7 @@ async def test_quantity_change_produces_diff(txn_fixture: Transaction):
 async def test_multiple_field_changes_produce_single_diff(txn_fixture: Transaction):
     """Test 2: Multiple field changes produce one diff dict with all changed fields."""
     diff = compute_field_diff(
-        txn_fixture,
+        _snapshot(txn_fixture),
         {
             "quantity": Decimal("2.0"),
             "unit_price": Decimal("60000.0"),
@@ -100,7 +105,7 @@ async def test_multiple_field_changes_produce_single_diff(txn_fixture: Transacti
 async def test_no_changes_produces_empty_diff(txn_fixture: Transaction):
     """Test 3: No actual changes produce an empty diff (no audit row should be written)."""
     diff = compute_field_diff(
-        txn_fixture,
+        _snapshot(txn_fixture),
         {
             "quantity": Decimal("1.0"),  # same as existing
             "notes": None,  # same as existing (None)
@@ -153,7 +158,7 @@ async def test_audit_rows_ordered_desc(session: AsyncSession, txn_fixture: Trans
 async def test_decimal_fields_serialize_as_strings(txn_fixture: Transaction):
     """Test 11: Decimal field changes must serialize as strings in changed_fields."""
     diff = compute_field_diff(
-        txn_fixture,
+        _snapshot(txn_fixture),
         {"quantity": Decimal("1.5"), "unit_price": Decimal("55000.12345678")},
     )
     # Values must be strings — not floats or Decimal objects

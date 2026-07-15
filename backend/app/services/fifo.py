@@ -1,3 +1,12 @@
+"""FIFO lot matching and the canonical pair recompute.
+
+``recompute_fifo_for_pair`` is the single convergence point every lot-affecting
+mutation path (create, update, delete, linked trade, reconciliation) funnels
+through: it wipes ALL lot allocations on the (account, instrument) pair and
+rematches the live lot-consuming rows in canonical order, so the alloc state is
+always a pure function of the current live transactions. Mutation paths never
+need to pre-release stale allocations themselves.
+"""
 from collections import defaultdict
 from decimal import Decimal
 
@@ -5,7 +14,12 @@ from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import DISPOSAL_TXN_TYPES
+from app.core.enums import (
+    LOT_CONSUMING_TXN_TYPES,
+    LOT_SOURCE_TXN_TYPES,
+    is_lot_consuming,
+    is_lot_source,
+)
 from app.models.lot_alloc import LotAlloc
 from app.models.transaction import Transaction
 
@@ -30,22 +44,22 @@ async def match_lots_for_sell(
     sell_qty = abs(sell_txn.quantity)
     is_adjustment = sell_txn.txn_type == "adjustment"
 
-    # Fetch all buy transactions for this (account, instrument) pair, ordered FIFO (date ASC).
-    # quantity is TEXT-backed (DecimalText) — the qty>0 sign filter moves to Python
-    # below; a SQL comparison would type-juggle the text against an integer.
+    # Fetch all lot-source rows for this (account, instrument) pair, ordered FIFO
+    # (date ASC). Sign refinement in Python per core/enums lot semantics.
     stmt = (
         select(Transaction)
         .where(
             Transaction.account_id == sell_txn.account_id,
             Transaction.instrument_id == sell_txn.instrument_id,
-            # Positive adjustments are buy-lot equivalents (system-only top-ups).
-            Transaction.txn_type.in_(("buy", "adjustment")),
+            Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
     )
     result = await session.execute(stmt)
-    buy_txns = [b for b in result.scalars().all() if b.quantity > Decimal("0")]
+    buy_txns = [
+        b for b in result.scalars().all() if is_lot_source(b.txn_type, b.quantity)
+    ]
 
     # For each buy, compute how much is already consumed by prior sells.
     # IMPORTANT: scope to buy_txn_ids belonging to THIS (account, instrument) pair only.
@@ -130,44 +144,44 @@ async def recompute_fifo_for_pair(
     account_id: str,
     instrument_id: str,
 ) -> None:
-    """Re-run FIFO for every disposal on this (account, instrument) pair, in
-    FIFO order. A disposal here is a sell, a spend, or a DOWNWARD (negative)
-    adjustment. A negative reconciliation trim consumes open lots exactly like
-    a sell. The rematch is always pair-wide: a disposal can consume a buy dated
-    after it, so per-disposal rematching is order-sensitive.
+    """Converge this (account, instrument) pair to canonical FIFO attribution.
 
-    Deletes the lot allocs of ALL selected disposals first (one flush), then
-    rematches each in FIFO order. Rematching one at a time would let a
-    not-yet-rematched later disposal's stale allocations still count as
-    consumption, giving non-FIFO lot attribution and wrong per-disposal realized
-    gains. Raises ValueError if a disposal can no longer be covered by open lots.
+    Wipes EVERY lot allocation on the pair, including allocations owned by rows
+    that are no longer lot-consuming (soft-deleted rows, adjustments edited from
+    a trim into a top-up), then rematches the live lot-consuming rows in
+    canonical order (date asc, created_at asc). The rematch is always pair-wide:
+    a disposal can consume a buy dated after it, so per-row rematching is
+    order-sensitive. Raises ValueError if a lot-consuming row can no longer be
+    covered by open lots (callers map this to 422 and roll back).
     """
+    # Blanket wipe keyed by ownership, not by current role: a row whose role
+    # changed since its allocs were written would otherwise leave stale rows
+    # that contaminate availability for every rematch below.
+    pair_txn_ids = select(Transaction.id).where(
+        Transaction.account_id == account_id,
+        Transaction.instrument_id == instrument_id,
+    )
+    await session.execute(
+        sql_delete(LotAlloc).where(LotAlloc.sell_txn_id.in_(pair_txn_ids))
+    )
+    await session.flush()
+
     stmt = (
         select(Transaction)
         .where(
             Transaction.account_id == account_id,
             Transaction.instrument_id == instrument_id,
-            # sell/spend plus adjustments. The downward-only sign filter for
-            # adjustments moves to Python (quantity is TEXT-backed, so a SQL
-            # comparison would coerce the text against a number). Positive
-            # adjustments are lot sources, not disposals, and are dropped below.
-            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES | {"adjustment"}),
+            Transaction.txn_type.in_(LOT_CONSUMING_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
     )
     result = await session.execute(stmt)
-    disposals = [
+    consumers = [
         txn
         for txn in result.scalars().all()
-        if txn.txn_type in DISPOSAL_TXN_TYPES or txn.quantity < Decimal("0")
+        if is_lot_consuming(txn.txn_type, txn.quantity)
     ]
-    # Clear every disposal's allocs up front so availability at each rematch
-    # step reflects only what earlier sells (already rematched in this pass)
-    # have consumed, never a later sell's stale rows.
-    for sell_txn in disposals:
-        await delete_lot_allocs_for_sell(session, sell_txn.id)
-    await session.flush()
-    for sell_txn in disposals:
+    for sell_txn in consumers:
         await match_lots_for_sell(session, sell_txn)
         await session.flush()

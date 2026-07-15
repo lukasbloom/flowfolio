@@ -17,12 +17,11 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ZERO
-from app.core.enums import DISPOSAL_TXN_TYPES
+from app.core.enums import signed_quantity
 from app.models.instrument import Instrument
 from app.models.reconciliation import Reconciliation
 from app.models.transaction import Transaction
@@ -30,10 +29,15 @@ from app.schemas.reconciliation import (
     ReconciliationCreate,
     ReconciliationPreviewRow,
 )
+from app.services.cost_basis import compute_cost_basis
 from app.services.fifo import recompute_fifo_for_pair
-from app.services.fx import get_or_fetch_fx_rate
-from app.services.networth import _fx_on_or_before, _load_fx, _load_quotes
-from app.services.quotes import MissingFxRateError
+from app.services.fx import FxUpstreamError, resolve_locked_fx_rate
+from app.services.quotes import (
+    MissingFxRateError,
+    fx_on_or_before,
+    load_fx,
+    load_quotes,
+)
 from app.services.quotes import quote_on_or_before as _quote_on_or_before
 
 logger = logging.getLogger(__name__)
@@ -84,21 +88,11 @@ async def build_preview(
     `snapshot_date` (inclusive). Each row carries app_qty plus EUR-value
     derived via networth-service price/FX-as-of helpers.
     """
-    # 1. Sum signed qty per instrument through snapshot_date. quantity is
-    #    TEXT-backed (DecimalText) — sum and the !=ZERO open-set HAVING move to
-    #    Python; a SQL SUM/HAVING would do float arithmetic on the text values.
-    raw_qty_stmt = (
-        select(Transaction.instrument_id, Transaction.quantity)
-        .where(
-            Transaction.account_id == account_id,
-            Transaction.deleted_at.is_(None),
-            Transaction.date <= snapshot_date,
-        )
+    # 1. Sum signed qty per instrument through snapshot_date, then drop
+    #    holdings that net to exactly zero (the closed positions).
+    qty_by_instrument = await _qty_by_instrument(
+        session, account_id, as_of=snapshot_date
     )
-    qty_by_instrument: dict[str, Decimal] = {}
-    for instrument_id, qty in await session.execute(raw_qty_stmt):
-        qty_by_instrument[instrument_id] = qty_by_instrument.get(instrument_id, ZERO) + qty
-    # Open-set: drop holdings that net to exactly zero (the closed positions).
     qty_rows = [
         (instrument_id, total)
         for instrument_id, total in qty_by_instrument.items()
@@ -119,8 +113,8 @@ async def build_preview(
     # 3. Load price quotes + FX rates as-of snapshot_date.
     # _load_quotes returns dict[str, list[PriceQuote]] keyed by instrument_id.
     # _load_fx returns dict[date, Decimal] of EUR-base rates (USD per 1 EUR).
-    quotes_by_instrument = await _load_quotes(session, snapshot_date)
-    fx_by_date = await _load_fx(session, snapshot_date)
+    quotes_by_instrument = await load_quotes(session, snapshot_date)
+    fx_by_date = await load_fx(session, snapshot_date)
 
     # 4. Build rows.
     rows: list[ReconciliationPreviewRow] = []
@@ -150,7 +144,7 @@ async def build_preview(
                 # missing-price condition for the row rather than 500ing
                 # the whole preview.
                 try:
-                    fx = _fx_on_or_before(fx_by_date, snapshot_date)
+                    fx = fx_on_or_before(fx_by_date, snapshot_date)
                 except MissingFxRateError:
                     has_price = False
                     fx = None
@@ -176,27 +170,26 @@ async def build_preview(
     return rows
 
 
-async def _current_qty_map(
-    session: AsyncSession, account_id: str
+async def _qty_by_instrument(
+    session: AsyncSession, account_id: str, *, as_of: date | None = None
 ) -> dict[str, Decimal]:
-    """Sum signed quantity per instrument across the FULL history for an
-    account (no date filter), excluding soft-deleted rows.
+    """Sum signed quantity per instrument for an account, excluding
+    soft-deleted rows, optionally only through `as_of` (inclusive).
 
-    Used by save_event to derive the adjustment delta against the user's
-    current app-side position. The snapshot_date on a Reconciliation event
-    is the EFFECTIVE date of the adjustment (it determines FIFO ordering
-    via recompute_fifo_for_pair when negative); it is not an
-    as-of-date for the diff. The user types the broker's CURRENT qty into
-    the form, and the adjustment must close the gap between current
-    app-state and that broker value — not the gap between the
-    snapshot-date app-state and that broker value.
+    quantity is TEXT-backed (DecimalText), so the sum runs in Python; a SQL
+    SUM would coerce the text values back to float.
+
+    save_event calls this WITHOUT a date filter: the snapshot_date on a
+    Reconciliation event is the EFFECTIVE date of the adjustment, not an
+    as-of-date for the diff. The user types the broker's CURRENT qty into the
+    form, so the adjustment must close the gap against current app-state.
     """
-    # quantity is TEXT-backed — sum the signed quantities per instrument in
-    # Python (a SQL SUM would coerce the text values back to float).
     stmt = select(Transaction.instrument_id, Transaction.quantity).where(
         Transaction.account_id == account_id,
         Transaction.deleted_at.is_(None),
     )
+    if as_of is not None:
+        stmt = stmt.where(Transaction.date <= as_of)
     result = await session.execute(stmt)
     qty_map: dict[str, Decimal] = {}
     for instrument_id, qty in result:
@@ -229,7 +222,7 @@ async def save_event(
         h.instrument_id: h.snapshot_qty for h in payload.holdings
     }
     # app-qty derived from current signed-sum (no date filter).
-    app_qty_map = await _current_qty_map(session, payload.account_id)
+    app_qty_map = await _qty_by_instrument(session, payload.account_id)
 
     event = Reconciliation(
         account_id=payload.account_id,
@@ -309,115 +302,69 @@ async def save_event(
     # CLAUDE.md "NEVER float for money" gap that the previous Stage-2
     # POST /api/transactions flow violated (Number() coercion in the drawer).
     rejected_txn_ids: list[str] = []
-    # Lazy-init a single httpx client used to auto-fetch ECB FX for any USD
-    # reject row whose payload omits fx_rate_to_eur. Created on first need so
-    # all-EUR reconciliations don't pay the connection-pool setup cost.
-    fx_client: Optional[httpx.AsyncClient] = None
-    try:
-        for rtxn in payload.rejected_txns:
-            snap_qty = snapshot_map.get(rtxn.instrument_id, ZERO)
-            app_qty_val = app_qty_map.get(rtxn.instrument_id, ZERO)
-            delta_abs = abs(snap_qty - app_qty_val)
-            if delta_abs == ZERO:
-                # Guard: snapshot == app means no quantity to record. The frontend
-                # only stages Reject on drift rows, so this should not occur in
-                # normal flow — log and skip rather than persist a 0-qty txn.
-                logger.warning(
-                    "rejected_txn for instrument %s has zero delta — skipping",
-                    rtxn.instrument_id,
-                )
-                continue
-
-            effective_date = (
-                rtxn.txn_date if rtxn.txn_date is not None else payload.snapshot_date
-            )
-
-            # cost_basis_eur = qty * unit_price converted to EUR.
-            # For EUR-priced txns we lock fx_rate_to_eur=1 (same convention used
-            # everywhere else in the project — see services/networth, schemas/transaction).
-            #
-            # USD branch: if payload supplies fx_rate_to_eur, lock it on the row
-            # (broker-markup case, mirrors routers/transactions.py:100). If not,
-            # auto-fetch ECB EUR/USD rate as-of effective_date via Frankfurter —
-            # this honors the drawer's "leave blank to fetch" promise and stops
-            # the previous silent fx=1 default that persisted USD numbers in the
-            # EUR cost_basis_eur column. Failure to fetch raises ValueError;
-            # the router maps that to 422 and rolls back the whole save.
-            if rtxn.price_currency == "USD":
-                if rtxn.fx_rate_to_eur is not None:
-                    fx = rtxn.fx_rate_to_eur
-                    stored_fx: Decimal | None = rtxn.fx_rate_to_eur
-                else:
-                    if fx_client is None:
-                        fx_client = httpx.AsyncClient()
-                    try:
-                        fx_row = await get_or_fetch_fx_rate(
-                            session, fx_client, effective_date,
-                            base="EUR", quote="USD",
-                        )
-                    except ValueError as exc:
-                        raise ValueError(
-                            f"USD reject for instrument {rtxn.instrument_id} "
-                            f"requires fx_rate_to_eur; none provided and ECB "
-                            f"lookup failed: {exc}"
-                        )
-                    fx = fx_row.rate
-                    stored_fx = fx_row.rate
-            else:
-                fx = Decimal("1")
-                stored_fx = Decimal("1")
-
-            cost_basis_eur = (delta_abs * rtxn.unit_price) / fx
-
-            # Sign convention (mirrors routers/transactions.py:62): sell/spend
-            # rows are stored with NEGATIVE signed quantity (they consume lots
-            # and reduce the holding). buy/yield/adjustment rows stay positive.
-            # The rest of the codebase (signed-sum balance, FIFO
-            # match_lots_for_sell which calls abs(), _quantity_after_events)
-            # depends on this invariant.
-            signed_qty = (
-                -delta_abs if rtxn.txn_type in DISPOSAL_TXN_TYPES else delta_abs
-            )
-
-            reject_txn = Transaction(
-                account_id=payload.account_id,
-                instrument_id=rtxn.instrument_id,
-                txn_type=rtxn.txn_type,
-                date=effective_date,
-                quantity=signed_qty,
-                unit_price=rtxn.unit_price,
-                price_currency=rtxn.price_currency,
-                fx_rate_to_eur=stored_fx,
-                cost_basis_eur=cost_basis_eur,
-                fee_eur=rtxn.fee_eur,
-                source="manual",
-                reconciliation_id=event.id,
-                notes=rtxn.notes,
-            )
-            session.add(reject_txn)
-            await session.flush()  # populate reject_txn.id
-
-            # Re-match the whole pair in canonical FIFO order (plan 015). This
-            # single pair-wide recompute serves both reject shapes: for a
-            # sell/spend reject it matches the new disposal (the recompute INCLUDES
-            # the row we just inserted, so no separate match_lots_for_sell call is
-            # needed) AND re-attributes any later disposals it now competes with.
-            # For a back-dated buy reject it re-attributes existing disposals onto
-            # the new lot they should draw from. The old date >= effective_date
-            # scope was unsound (it skipped earlier disposals holding a lot dated
-            # on or after the new row) and never ran at all for buy rejects. A
-            # yield reject is not lot-affecting, so the recompute is a harmless
-            # no-op for it.
-            await recompute_fifo_for_pair(
-                session,
-                payload.account_id,
+    for rtxn in payload.rejected_txns:
+        snap_qty = snapshot_map.get(rtxn.instrument_id, ZERO)
+        app_qty_val = app_qty_map.get(rtxn.instrument_id, ZERO)
+        delta_abs = abs(snap_qty - app_qty_val)
+        if delta_abs == ZERO:
+            # Guard: snapshot == app means no quantity to record. The frontend
+            # only stages Reject on drift rows, so this should not occur in
+            # normal flow — log and skip rather than persist a 0-qty txn.
+            logger.warning(
+                "rejected_txn for instrument %s has zero delta — skipping",
                 rtxn.instrument_id,
             )
+            continue
 
-            rejected_txn_ids.append(reject_txn.id)
-    finally:
-        if fx_client is not None:
-            await fx_client.aclose()
+        effective_date = (
+            rtxn.txn_date if rtxn.txn_date is not None else payload.snapshot_date
+        )
+
+        # Lock FX via the shared write-time convention (EUR identity, USD
+        # explicit-or-fetch; see services/fx.resolve_locked_fx_rate). Upstream
+        # failure maps to ValueError so the router 422s and rolls back the
+        # whole save.
+        try:
+            stored_fx = await resolve_locked_fx_rate(
+                session, rtxn.price_currency, effective_date, rtxn.fx_rate_to_eur
+            )
+        except FxUpstreamError as exc:
+            raise ValueError(
+                f"USD reject for instrument {rtxn.instrument_id} "
+                f"requires fx_rate_to_eur; none provided and ECB "
+                f"lookup failed: {exc}"
+            )
+
+        reject_txn = Transaction(
+            account_id=payload.account_id,
+            instrument_id=rtxn.instrument_id,
+            txn_type=rtxn.txn_type,
+            date=effective_date,
+            quantity=signed_quantity(rtxn.txn_type, delta_abs),
+            unit_price=rtxn.unit_price,
+            price_currency=rtxn.price_currency,
+            fx_rate_to_eur=stored_fx,
+            fee_eur=rtxn.fee_eur,
+            source="manual",
+            reconciliation_id=event.id,
+            notes=rtxn.notes,
+        )
+        reject_txn.cost_basis_eur = compute_cost_basis(reject_txn)
+        session.add(reject_txn)
+        await session.flush()  # populate reject_txn.id
+
+        # Converge the pair to canonical FIFO. One pair-wide recompute serves
+        # both reject shapes: a sell/spend reject is matched by the recompute
+        # itself, and a back-dated buy reject re-attributes existing disposals
+        # onto the new lot. A yield reject is not lot-affecting, so the
+        # recompute is a harmless no-op for it.
+        await recompute_fifo_for_pair(
+            session,
+            payload.account_id,
+            rtxn.instrument_id,
+        )
+
+        rejected_txn_ids.append(reject_txn.id)
 
     # Stash the new IDs as a transient attribute for the router to read
     # into ReconciliationResponse. This survives db.refresh() because it is

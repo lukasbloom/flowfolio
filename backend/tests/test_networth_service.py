@@ -512,7 +512,7 @@ async def test_instrument_filter_isolates_one_holding(session):
     )
     alpha_only = await get_networth_series(
         session, timeframe="1m", display_currency="EUR",
-        instrument_id=alpha.id,
+        instrument_ids=[alpha.id],
     )
 
     last_full = full.points[-1].value

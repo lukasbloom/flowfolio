@@ -57,7 +57,7 @@ async def authed_client():
 
 
 # Captured once at import time, before any test monkeypatches
-# app.routers.transactions.httpx.AsyncClient (which is the same module-level
+# app.services.fx.httpx.AsyncClient (which is the same module-level
 # httpx.AsyncClient this file imports). Patching twice in one test must
 # REPLACE the mock transport, not wrap the previous factory around it, so
 # the factory below always builds on this original class rather than on
@@ -67,16 +67,16 @@ _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
 def _patch_frankfurter(monkeypatch, handler) -> None:
-    """Replace httpx.AsyncClient referenced from app.routers.transactions with a
+    """Replace httpx.AsyncClient referenced from app.services.fx with a
     MockTransport-backed client that runs `handler`. Module-level rebind so the
-    `async with httpx.AsyncClient()` block in the router uses our mock."""
+    `async with httpx.AsyncClient()` block in resolve_locked_fx_rate uses our mock."""
     transport = httpx.MockTransport(handler)
 
     def factory(*args, **kwargs):
         kwargs["transport"] = transport
         return _REAL_ASYNC_CLIENT(*args, **kwargs)
 
-    monkeypatch.setattr("app.routers.transactions.httpx.AsyncClient", factory)
+    monkeypatch.setattr("app.services.fx.httpx.AsyncClient", factory)
 
 
 def _frankfurter_ok(rate: str, date_str: str):

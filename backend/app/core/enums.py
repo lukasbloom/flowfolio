@@ -21,6 +21,8 @@ nothing iterates them for behavior).
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 # --- Instrument enums ---------------------------------------------------------
 INSTRUMENT_TYPES: tuple[str, ...] = (
     "stock",
@@ -53,3 +55,40 @@ DISPOSAL_TXN_TYPES: frozenset[str] = frozenset({"sell", "spend"})
 # Acquisition-side events that the priced-txn / cost-segment paths treat alike:
 # buys and spends. Replaces the {"buy", "spend"} literals.
 ACQUISITION_TXN_TYPES: frozenset[str] = frozenset({"buy", "spend"})
+
+# --- FIFO lot semantics ---------------------------------------------------------
+# An adjustment plays either role depending on its sign: a negative
+# reconciliation trim consumes open lots like a sell, a positive top-up is a
+# buy-lot equivalent. The sets below are the coarse SQL-side type filters; the
+# sign refinement happens in Python via the predicates, because quantity is
+# TEXT-backed (DecimalText) and a SQL sign comparison would type-juggle the
+# text against a number.
+LOT_CONSUMING_TXN_TYPES: frozenset[str] = DISPOSAL_TXN_TYPES | {"adjustment"}
+LOT_SOURCE_TXN_TYPES: frozenset[str] = frozenset({"buy", "adjustment"})
+# Every txn type that can change lot attribution on a pair (yield never does).
+LOT_AFFECTING_TXN_TYPES: frozenset[str] = LOT_CONSUMING_TXN_TYPES | LOT_SOURCE_TXN_TYPES
+
+_ZERO = Decimal("0")
+
+
+def is_lot_consuming(txn_type: str, quantity: Decimal) -> bool:
+    """True for rows that consume open lots: sell, spend, or a negative adjustment."""
+    return txn_type in DISPOSAL_TXN_TYPES or (
+        txn_type == "adjustment" and quantity < _ZERO
+    )
+
+
+def is_lot_source(txn_type: str, quantity: Decimal) -> bool:
+    """True for rows that open lots: buy, or a positive adjustment."""
+    return txn_type in LOT_SOURCE_TXN_TYPES and quantity > _ZERO
+
+
+def signed_quantity(txn_type: str, quantity: Decimal) -> Decimal:
+    """Stored-sign convention. Disposals (sell/spend) store negative. Adjustments
+    keep their caller-supplied sign (trims negative, top-ups positive). Everything
+    else stores the positive magnitude."""
+    if txn_type in DISPOSAL_TXN_TYPES:
+        return -abs(quantity)
+    if txn_type == "adjustment":
+        return quantity
+    return abs(quantity)

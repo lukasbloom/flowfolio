@@ -317,7 +317,7 @@ async def test_trades_fx_upstream_error_returns_502_and_rolls_back(
     async def fail_fx(*args, **kwargs):
         raise ValueError("frankfurter network error: ConnectError")
 
-    monkeypatch.setattr("app.services.trades.get_or_fetch_fx_rate", fail_fx)
+    monkeypatch.setattr("app.services.fx.get_or_fetch_fx_rate", fail_fx)
 
     resp = await client.post(
         "/api/trades",
