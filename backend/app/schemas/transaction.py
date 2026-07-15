@@ -16,6 +16,14 @@ VALID_TXN_TYPES = set(TXN_TYPE_SET)
 VALID_SOURCES = set(TXN_SOURCE_SET)
 
 
+def _require_eur_usd(price_currency: str | None) -> None:
+    """Shared EUR/USD whitelist for the create and update schemas."""
+    if price_currency is not None and price_currency not in {"EUR", "USD"}:
+        raise ValueError(
+            f"price_currency must be 'EUR' or 'USD', got {price_currency!r}"
+        )
+
+
 class TransactionCreate(DecimalModel):
 
     account_id: str
@@ -115,27 +123,15 @@ class TransactionCreate(DecimalModel):
         """Only EUR/USD txn currencies. fx_rate_to_eur may be omitted,
         the POST /api/transactions handler auto-fetches from Frankfurter when
         price_currency='USD' and fx_rate_to_eur is None."""
-        if (
-            self.price_currency is not None
-            and self.price_currency not in {"EUR", "USD"}
-        ):
-            raise ValueError(
-                f"price_currency must be 'EUR' or 'USD', got {self.price_currency!r}"
-            )
+        _require_eur_usd(self.price_currency)
         return self
 
 
 class TransactionUpdate(DecimalModel):
 
-    # txn_type is intentionally NOT a field on this schema. Sells only enter
-    # the system as part of an atomic linked trade through POST /api/trades,
-    # and since TransactionUpdate omits txn_type, Pydantic silently drops one
-    # if a client sends it in the PUT body. That field omission, not a DB
-    # constraint, is what actually stops PUT from turning a buy into a sell.
-    # ck_txn_trade_pair_required is a real CHECK constraint (raw DDL from the
-    # alembic baseline migration), but it is not declared on the Transaction
-    # model's __table_args__, so it is absent from the fast suite's
-    # Base.metadata.create_all schema and was never the enforcement path here.
+    # txn_type is intentionally NOT a field on this schema: Pydantic silently
+    # drops it from a PUT body, and that omission is what stops PUT from
+    # turning a buy into a sell (sells only enter via POST /api/trades).
     date: Optional[_date_t] = None
     quantity: Optional[DecimalStr] = None
     unit_price: Optional[DecimalStr] = None
@@ -147,13 +143,7 @@ class TransactionUpdate(DecimalModel):
     @model_validator(mode="after")
     def validate_currency_supported(self) -> "TransactionUpdate":
         """Only EUR/USD txn currencies, same restriction as TransactionCreate."""
-        if (
-            self.price_currency is not None
-            and self.price_currency not in {"EUR", "USD"}
-        ):
-            raise ValueError(
-                f"price_currency must be 'EUR' or 'USD', got {self.price_currency!r}"
-            )
+        _require_eur_usd(self.price_currency)
         return self
 
 

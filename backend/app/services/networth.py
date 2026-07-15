@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import clock
 from app.core.constants import TIMEFRAMES as _BASE_TIMEFRAMES
 from app.core.constants import VALUE_SCALE, ZERO
-from app.models import HoldingTag, Instrument, Tag, Transaction
+from app.models import Instrument, Transaction
 from app.services.cost_basis import (
     _load_allocations,
     _open_lots_at,
@@ -24,6 +24,7 @@ from app.services.quotes import (
     fx_on_or_before,
     load_fx,
     load_quotes,
+    tagged_holding_exists,
 )
 
 # networth's value/cost-basis quantization scale (1e-8). Aliased from the
@@ -465,21 +466,13 @@ def _convert_marker_value(
 
 
 def _apply_tag_exists_subquery(stmt, tag_filter: str | None):
-    """Mirror the (account_id, instrument_id, tag.name) exists-subquery used
-    in services/contributions.py so /api/networth applies the SAME filter
-    semantics. No-op when ``tag_filter`` is None — caller stays unchanged.
-    """
+    """Apply the shared tag filter; no-op when ``tag_filter`` is None."""
     if tag_filter is None:
         return stmt
     return stmt.where(
-        select(HoldingTag.account_id)
-        .join(Tag, Tag.id == HoldingTag.tag_id)
-        .where(
-            HoldingTag.account_id == Transaction.account_id,
-            HoldingTag.instrument_id == Transaction.instrument_id,
-            Tag.name == tag_filter,
+        tagged_holding_exists(
+            Transaction.account_id, Transaction.instrument_id, tag_filter
         )
-        .exists()
     )
 
 

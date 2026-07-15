@@ -208,9 +208,10 @@ def test_account_response_exposes_last_reconciled_date():
 def test_transaction_create_buy_requires_unit_price():
     """A buy without unit_price must be rejected at the API boundary
     so the chart never has to value an unpriced position."""
-    from app.schemas.transaction import TransactionCreate
-    from pydantic import ValidationError
     import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.transaction import TransactionCreate
 
     with pytest.raises(ValidationError) as exc:
         TransactionCreate(
@@ -229,9 +230,10 @@ def test_transaction_create_buy_requires_unit_price():
 
 def test_transaction_create_spend_requires_unit_price():
     """Same rule for spends — without a price, realized P&L is unknowable."""
-    from app.schemas.transaction import TransactionCreate
-    from pydantic import ValidationError
     import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.transaction import TransactionCreate
 
     with pytest.raises(ValidationError) as exc:
         TransactionCreate(
@@ -248,9 +250,10 @@ def test_transaction_create_spend_requires_unit_price():
 
 def test_transaction_create_buy_with_price_currency_only_still_rejected():
     """Both fields required together — neither alone is enough."""
-    from app.schemas.transaction import TransactionCreate
-    from pydantic import ValidationError
     import pytest
+    from pydantic import ValidationError
+
+    from app.schemas.transaction import TransactionCreate
 
     with pytest.raises(ValidationError) as exc:
         TransactionCreate(

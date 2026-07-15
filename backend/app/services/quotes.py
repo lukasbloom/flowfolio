@@ -277,6 +277,25 @@ async def load_holdings(
     return holdings, accounts_by_id, instruments_by_id
 
 
+def tagged_holding_exists(account_id_col, instrument_id_col, tag_name: str):
+    """EXISTS predicate: the (account, instrument) holding carries `tag_name`.
+
+    The single home for the tag-filter subquery shared by the networth,
+    realized, and contributions services. Pass the Transaction columns the
+    outer query correlates on.
+    """
+    return (
+        select(HoldingTag.account_id)
+        .join(Tag, Tag.id == HoldingTag.tag_id)
+        .where(
+            HoldingTag.account_id == account_id_col,
+            HoldingTag.instrument_id == instrument_id_col,
+            Tag.name == tag_name,
+        )
+        .exists()
+    )
+
+
 async def first_buy_date(
     session: AsyncSession, account_id: str, instrument_id: str
 ) -> date | None:

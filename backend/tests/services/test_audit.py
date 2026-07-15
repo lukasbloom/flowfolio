@@ -9,12 +9,13 @@ Covers:
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.database import Base, attach_sqlite_pragmas
 from app.models import Account, Instrument, Transaction
@@ -24,7 +25,6 @@ from app.services.audit import (
     compute_field_diff,
     write_audit_event,
 )
-from datetime import date
 
 
 @pytest_asyncio.fixture

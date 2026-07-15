@@ -1,15 +1,16 @@
 """Reconciliation tests."""
-import pytest
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from app.models.reconciliation import Reconciliation
-from app.services.reconciliation import build_preview, save_event
 from app.schemas.reconciliation import (
-    ReconciliationCreate,
-    HoldingSnapshotEntry,
     DriftDecision,
+    HoldingSnapshotEntry,
+    ReconciliationCreate,
 )
+from app.services.reconciliation import build_preview, save_event
 
 
 @pytest.mark.asyncio
@@ -42,9 +43,10 @@ async def test_accept_writes_adjustment_and_recomputes_fifo(
     the 10 BTC lot). Snapshot on 2026-04-01 says 2 BTC; app computes 7. Server-derived
     delta = snapshot − app = 2 − 7 = -5 → adjustment quantity = -5.
     """
-    from app.models.transaction import Transaction
-    from app.models.lot_alloc import LotAlloc
     from sqlalchemy import select
+
+    from app.models.lot_alloc import LotAlloc
+    from app.models.transaction import Transaction
 
     account = await make_account(db_session, name="XTB")
     btc = await make_instrument(db_session, symbol="BTC", name="Bitcoin", instrument_type="crypto", price_currency="USD")
@@ -93,8 +95,9 @@ async def test_reject_links_real_txn_to_event(
     db_session, make_account, make_instrument
 ):
     """Real txn (created via the extended POST /api/transactions schema) carries reconciliation_id FK."""
-    from app.models.transaction import Transaction
     from sqlalchemy import select
+
+    from app.models.transaction import Transaction
 
     account = await make_account(db_session, name="XTB")
     btc = await make_instrument(db_session, symbol="BTC", name="Bitcoin", instrument_type="crypto", price_currency="USD")
@@ -136,8 +139,9 @@ async def test_dismiss_writes_zero_qty_adjustment(
     db_session, make_account, make_instrument, make_transaction
 ):
     """Dismiss: dismissing drift writes a zero-qty adjustment row with notes='dismissed: ...'."""
-    from app.models.transaction import Transaction
     from sqlalchemy import select
+
+    from app.models.transaction import Transaction
 
     account = await make_account(db_session, name="XTB")
     btc = await make_instrument(db_session, symbol="BTC", name="Bitcoin", instrument_type="crypto", price_currency="USD")
@@ -169,7 +173,7 @@ async def test_dismiss_writes_zero_qty_adjustment(
 @pytest.mark.asyncio
 async def test_last_reconciled_max(db_session, make_account):
     """Badge: MAX(snapshot_date) per account is the source of truth."""
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
 
     account = await make_account(db_session, name="XTB")
     for snap in (date(2026, 3, 1), date(2026, 4, 15), date(2026, 4, 1)):
@@ -233,6 +237,7 @@ async def client():
 
 
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402  (used by fixture)
+
 from tests.conftest import seed_admin_password
 
 

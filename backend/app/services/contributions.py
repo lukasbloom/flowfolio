@@ -17,21 +17,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.core.constants import VALUE_SCALE, ZERO
-from app.models import HoldingTag, LotAlloc, PriceQuote, Tag, Transaction
+from app.models import LotAlloc, PriceQuote, Transaction
 from app.schemas.contributions import ContributionBucket, SeriesPoint
-from app.services.cost_basis import _cost_basis_at, _load_allocations, _open_lots_at
+from app.services.cost_basis import (
+    _load_allocations,
+    _open_lots_at,
+    lot_consuming_txn_ids,
+)
 from app.services.date_cursor import ForwardCursor
 from app.services.market_data import load_market_data
-from app.services.quotes import MissingFxRateError, QuoteRow, convert
+from app.services.quotes import (
+    MissingFxRateError,
+    QuoteRow,
+    convert,
+    tagged_holding_exists,
+)
 from app.services.quotes import convert_currency as _convert_currency
 
-# Re-exported here so existing imports (`from app.services.contributions import
-# _cost_basis_at`, etc.) continue to work — this module owned them historically
-# and a couple of internal callers may still reach in for the names. The
-# canonical source of truth is now ``app.services.cost_basis``.
 __all__ = (
-    "_cost_basis_at",
-    "_load_allocations",
     "get_contribution_segments",
     "get_cost_basis_series",
 )
@@ -55,18 +58,7 @@ async def get_cost_basis_series(
     # An adjustment is a reconciliation correction, NOT a cash contribution,
     # so contributions must not double-count drift remediation as new money in.
     buy_txns = [txn for txn in txns if txn.txn_type == "buy"]
-    # Downward adjustments consume open lots (plan 008), so their allocs must
-    # reach _open_lots_at exactly as sell/spend allocs do. Omitting them leaves
-    # the trimmed quantity counted as still-open basis (phantom cost basis). The
-    # downward-only sign filter runs in Python since quantity is TEXT-backed,
-    # mirroring fifo.py's convention.
-    sell_txn_ids = {
-        txn.id
-        for txn in txns
-        if txn.txn_type in {"sell", "spend"}
-        or (txn.txn_type == "adjustment" and txn.quantity < ZERO)
-    }
-    allocations = await _load_allocations(session, sell_txn_ids)
+    allocations = await _load_allocations(session, lot_consuming_txn_ids(txns))
     # NOTE: contributions keeps its OWN _load_quotes for the value loop — that
     # ordering carries the documented manual-source tiebreak DRIFT vs. networth
     # (see _load_quotes below). Do NOT route these value quotes through the
@@ -191,6 +183,9 @@ async def get_contribution_segments(
     if not txns:
         return []
 
+    # Deliberately narrower than lot_consuming_txn_ids: segments only read
+    # allocs keyed by linked-trade sells and spends below, so adjustment
+    # allocs would be inert here anyway.
     disposing_ids = {txn.id for txn in txns if txn.txn_type in {"sell", "spend"}}
     allocations = await _load_allocations(session, disposing_ids)
     buckets: dict[date, dict[str, Decimal | str | date]] = {}
@@ -266,14 +261,9 @@ async def _load_transactions(
     )
     if tag_filter is not None:
         stmt = stmt.where(
-            select(HoldingTag.account_id)
-            .join(Tag, Tag.id == HoldingTag.tag_id)
-            .where(
-                HoldingTag.account_id == Transaction.account_id,
-                HoldingTag.instrument_id == Transaction.instrument_id,
-                Tag.name == tag_filter,
+            tagged_holding_exists(
+                Transaction.account_id, Transaction.instrument_id, tag_filter
             )
-            .exists()
         )
     # Empty list = no filter (full portfolio); a non-empty
     # list narrows BOTH cost_basis_series and portfolio_value_series via the

@@ -32,7 +32,10 @@ from app.services.perf import (
     _quantity_after_internal_events,
     calculate_twrr,
     get_performance_rows,
+    load_twrr_quotes,
+    load_twrr_transactions,
 )
+from app.services.quotes import first_buy_date
 from app.services.reconciliation import save_event
 
 
@@ -371,12 +374,14 @@ async def test_twrr_boundary_dates_includes_adjustment(
     await db_session.flush()
     await db_session.commit()
 
-    result = await calculate_twrr(
-        db_session,
-        account.id,
-        btc.id,
-        start=date(2026, 1, 1),
-        end=date(2026, 3, 31),
+    twrr_quotes = await load_twrr_quotes(db_session, {btc.id}, date(2026, 3, 31))
+    twrr_txns = await load_twrr_transactions(db_session, date(2026, 3, 31))
+    result = calculate_twrr(
+        date(2026, 1, 1),
+        date(2026, 3, 31),
+        first_buy=await first_buy_date(db_session, account.id, btc.id),
+        quotes=twrr_quotes.get(btc.id, []),
+        txns=twrr_txns.get((account.id, btc.id), []),
     )
 
     # Direct white-box assertion against TwrrResult.boundary_dates: must

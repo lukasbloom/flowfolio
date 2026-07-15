@@ -13,7 +13,10 @@ from app.services.perf import (
     calculate_open_lot_basis,
     calculate_twrr,
     get_performance_rows,
+    load_twrr_quotes,
+    load_twrr_transactions,
 )
+from app.services.quotes import first_buy_date
 
 
 @pytest_asyncio.fixture
@@ -158,6 +161,21 @@ async def _quote(
     return quote
 
 
+async def _twrr(session, account, instrument, *, start, end):
+    """Resolve first-buy and preloads the way production callers do, then run
+    the pure calculate_twrr."""
+    quotes = await load_twrr_quotes(session, {instrument.id}, end)
+    txns = await load_twrr_transactions(session, end)
+    first_buy = await first_buy_date(session, account.id, instrument.id)
+    return calculate_twrr(
+        start,
+        end,
+        first_buy=first_buy,
+        quotes=quotes.get(instrument.id, []),
+        txns=txns.get((account.id, instrument.id), []),
+    )
+
+
 @pytest.mark.asyncio
 async def test_twrr_known_value_yield_internal_returns_five_percent(session):
     account, instrument = await _seed_account_instrument(session)
@@ -182,12 +200,8 @@ async def test_twrr_known_value_yield_internal_returns_five_percent(session):
     await _quote(session, instrument, quote_date=date(2025, 7, 1), price="100")
     await _quote(session, instrument, quote_date=date(2026, 1, 1), price="100")
 
-    result = await calculate_twrr(
-        session,
-        account_id=account.id,
-        instrument_id=instrument.id,
-        start=date(2025, 1, 1),
-        end=date(2026, 1, 1),
+    result = await _twrr(
+        session, account, instrument, start=date(2025, 1, 1), end=date(2026, 1, 1)
     )
 
     assert result.twrr == Decimal("0.05")
@@ -222,12 +236,8 @@ async def test_twrr_subperiod_uses_boundary_prices_not_window_end(session):
     await _quote(session, instrument, quote_date=date(2025, 7, 1), price="120")
     await _quote(session, instrument, quote_date=date(2026, 1, 1), price="150")
 
-    result = await calculate_twrr(
-        session,
-        account_id=account.id,
-        instrument_id=instrument.id,
-        start=date(2025, 1, 1),
-        end=date(2026, 1, 1),
+    result = await _twrr(
+        session, account, instrument, start=date(2025, 1, 1), end=date(2026, 1, 1)
     )
 
     # Sub-period 1: 100 → 120 = +20% (1 unit)
@@ -262,10 +272,10 @@ async def test_twrr_total_loss_does_not_crash_annualization(session):
     # Use a tiny epsilon as the end price — sub-period quote lookup needs >0.
     await _quote(session, instrument, quote_date=date(2025, 7, 1), price="0.0000000001")
 
-    result = await calculate_twrr(
+    result = await _twrr(
         session,
-        account_id=account.id,
-        instrument_id=instrument.id,
+        account,
+        instrument,
         start=date(2024, 1, 1),
         end=date(2025, 7, 1),  # 547 days, > 365 → triggers annualization branch
     )

@@ -14,10 +14,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.core.constants import ZERO
+from app.core.enums import (
+    DISPOSAL_TXN_TYPES,
+    LOT_CONSUMING_TXN_TYPES,
+    LOT_SOURCE_TXN_TYPES,
+    is_lot_consuming,
+)
 from app.models import LotAlloc, Transaction
 from app.schemas.closed import ClosedPositionRow
 from app.services.market_data import MarketDataSnapshot, load_market_data
-from app.services.perf import calculate_twrr
+from app.services.perf import (
+    calculate_twrr,
+    load_twrr_quotes,
+    load_twrr_transactions,
+)
 from app.services.quotes import latest_quote as _latest_quote
 from app.services.quotes import load_holdings
 
@@ -54,6 +64,13 @@ async def get_closed_positions(
     )
     realized_by_holding = await _realized_gains_batch(session, closed_set)
     first_buy_by_holding = await _first_buy_dates_batch(session, closed_set)
+    # TWRR inputs, batched like everything above. Preloading through today
+    # covers every per-row [first_buy, last_close] window: calculate_twrr
+    # filters by date internally, so rows/quotes after last_close are inert.
+    twrr_quotes_by_instrument = await load_twrr_quotes(
+        session, {instrument_id for _, instrument_id in closed_set}, clock.today()
+    )
+    twrr_txns_by_holding = await load_twrr_transactions(session, clock.today())
 
     rows: list[ClosedPositionRow] = []
     for account_id, instrument_id in holdings:
@@ -88,28 +105,23 @@ async def get_closed_positions(
         # percent_return is a ratio — currency-invariant — so compute it from
         # the EUR raw before converting realized for display.
         percent_return = None
-        if realized_eur_raw is not None and total_basis_eur > ZERO:
+        if total_basis_eur > ZERO:
             percent_return = realized_eur_raw / total_basis_eur
         # The Closed Positions table renders the Realized column under the
         # user-selected currency badge; convert to display_currency to match
         # the convention used by services/realized.py (otherwise USD viewers
         # see EUR magnitudes labelled "$"). Convert via the
-        # snapshot's per-date FX at last_close_date (was _convert_currency).
-        realized_eur = (
-            snapshot.convert(
-                realized_eur_raw, "EUR", display_currency, as_of=last_close_date
-            )
-            if realized_eur_raw is not None
-            else None
+        # snapshot's per-date FX at last_close_date.
+        realized_eur = snapshot.convert(
+            realized_eur_raw, "EUR", display_currency, as_of=last_close_date
         )
 
-        twrr = await calculate_twrr(
-            session,
-            account_id,
-            instrument_id,
+        twrr = calculate_twrr(
             first_buy_date,
             last_close_date,
             first_buy=first_buy_date,
+            quotes=twrr_quotes_by_instrument.get(instrument_id, []),
+            txns=twrr_txns_by_holding.get((account_id, instrument_id), []),
         )
         rows.append(
             ClosedPositionRow(
@@ -197,13 +209,13 @@ async def _last_closed_dates_batch(
         Transaction.txn_type,
         Transaction.quantity,
     ).where(
-        Transaction.txn_type.in_(("sell", "spend", "adjustment")),
+        Transaction.txn_type.in_(LOT_CONSUMING_TXN_TYPES),
         Transaction.deleted_at.is_(None),
     )
     result = await session.execute(stmt)
     last_by: dict[tuple[str, str], date] = {}
     for account_id, instrument_id, txn_date, txn_type, qty in result:
-        if txn_type == "adjustment" and qty >= ZERO:
+        if not is_lot_consuming(txn_type, qty):
             continue
         key = (account_id, instrument_id)
         if key not in closed_set:
@@ -234,7 +246,7 @@ async def _first_buy_dates_batch(
             Transaction.quantity,
         )
         .where(
-            Transaction.txn_type.in_(("buy", "adjustment")),
+            Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
     )
@@ -276,7 +288,7 @@ async def _buy_basis_and_qty_batch(
             Transaction.quantity,
         )
         .where(
-            Transaction.txn_type.in_(("buy", "adjustment")),
+            Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
     )
@@ -316,7 +328,7 @@ async def _realized_gains_batch(
         )
         .join(Transaction, LotAlloc.sell_txn_id == Transaction.id)
         .where(
-            Transaction.txn_type.in_(("sell", "spend")),
+            Transaction.txn_type.in_(DISPOSAL_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
     )
@@ -340,7 +352,7 @@ def _average_buy_cost_from_parts(
     """Pure reducer matching _average_buy_cost: None when quantity<=ZERO or
     basis<=ZERO, else (basis/quantity) converted at as_of via the snapshot.
     """
-    if quantity is None or quantity <= ZERO or basis <= ZERO:
+    if quantity <= ZERO or basis <= ZERO:
         return None
     avg_cost_eur = basis / quantity
     return snapshot.convert(avg_cost_eur, "EUR", display_currency, as_of=as_of)

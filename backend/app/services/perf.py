@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
@@ -18,6 +18,7 @@ from app.core.constants import (
 from app.core.constants import (
     PERF_UNIT_SCALE as UNIT_SCALE,
 )
+from app.core.enums import LOT_SOURCE_TXN_TYPES, is_lot_source
 from app.models import (
     LotAlloc,
     PriceQuote,
@@ -28,32 +29,14 @@ from app.services.quotes import (
     load_holdings,
 )
 from app.services.quotes import (
-    convert_currency as _convert_currency,
-)
-from app.services.quotes import (
     first_buy_date as _first_buy_date,
-)
-from app.services.quotes import (
-    latest_eur_usd_rate as _latest_eur_usd_rate,
-)
-from app.services.quotes import (
-    latest_quote as _latest_quote,
 )
 
 INSUFFICIENT_HISTORY_DAYS = 7
 # UNIT_SCALE (perf's 1e-18 quantization) and RATIO_SCALE (1e-16) are imported
 # from app.core.constants above; UNIT_SCALE is aliased from PERF_UNIT_SCALE.
 
-# MissingFxRateError, _convert_currency, _latest_eur_usd_rate, _latest_quote,
-# and _first_buy_date now live in app.services.quotes and are re-exported here
-# (under their historical leading-underscore names) so existing imports such as
-# `from app.services.perf import _convert_currency, _latest_quote` keep working.
 __all__ = [
-    "MissingFxRateError",
-    "_convert_currency",
-    "_latest_eur_usd_rate",
-    "_latest_quote",
-    "_first_buy_date",
     "calculate_twrr",
     "calculate_open_lot_basis",
     "get_performance_rows",
@@ -181,14 +164,15 @@ async def calculate_open_lot_basis(
         .where(
             Transaction.account_id == account_id,
             Transaction.instrument_id == instrument_id,
-            # Positive adjustments contribute open lots (cost_basis_eur=NULL handled by guard at line ~138).
-            Transaction.txn_type.in_(("buy", "adjustment")),
+            Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
     )
     buy_result = await session.execute(buy_stmt)
-    buy_txns = [txn for txn in buy_result.scalars() if txn.quantity > ZERO]
+    buy_txns = [
+        txn for txn in buy_result.scalars() if is_lot_source(txn.txn_type, txn.quantity)
+    ]
     buy_ids = [txn.id for txn in buy_txns]
 
     consumed_by_buy: dict[str, Decimal] = defaultdict(lambda: ZERO)
@@ -236,7 +220,7 @@ async def calculate_open_lot_basis_batch(
     buy_stmt = (
         select(Transaction)
         .where(
-            Transaction.txn_type.in_(("buy", "adjustment")),
+            Transaction.txn_type.in_(LOT_SOURCE_TXN_TYPES),
             Transaction.deleted_at.is_(None),
         )
         .order_by(Transaction.date.asc(), Transaction.created_at.asc())
@@ -245,7 +229,7 @@ async def calculate_open_lot_basis_batch(
     buys_by_holding: dict[tuple[str, str], list[Transaction]] = {}
     all_buy_ids: list[str] = []
     for buy in buy_result.scalars():
-        if buy.quantity <= ZERO:
+        if not is_lot_source(buy.txn_type, buy.quantity):
             continue
         buys_by_holding.setdefault((buy.account_id, buy.instrument_id), []).append(buy)
         all_buy_ids.append(buy.id)
@@ -295,51 +279,36 @@ async def calculate_open_lot_basis_batch(
 def _quotes_in_window_from_preload(
     preloaded: list[PriceQuote], start: date, end: date
 ) -> list[PriceQuote]:
-    """Filter a per-instrument preloaded quote list to the TWRR window.
-
-    Replicates _quotes_in_window's predicate EXACTLY: start <= date <= end
-    (inclusive both ends). The preloaded list is the instrument's full history
+    """Filter a per-instrument preloaded quote list to the TWRR window,
+    inclusive both ends. The preloaded list is the instrument's full history
     ordered (date asc, fetched_at asc) with NO manual-source tiebreak — see
-    _load_twrr_quotes — so the windowed slice matches the SQL result row-for-row,
-    and _price_on_or_before's eligible[-1] pick selects the same quote.
+    load_twrr_quotes — so _price_on_or_before's eligible[-1] pick is stable.
     """
     return [q for q in preloaded if start <= q.date <= end]
 
 
-async def calculate_twrr(
-    session: AsyncSession,
-    account_id: str,
-    instrument_id: str,
+def calculate_twrr(
     start: date | None,
     end: date,
     *,
-    first_buy: date | None = None,
-    preloaded_quotes: list[PriceQuote] | None = None,
-    preloaded_txns: list[Transaction] | None = None,
+    first_buy: date | None,
+    quotes: list[PriceQuote],
+    txns: list[Transaction],
 ) -> TwrrResult:
-    """Compute TWRR for one (account, instrument).
+    """Compute TWRR for one (account, instrument), purely over supplied data.
 
-    `first_buy` may be passed in if the caller has already resolved it
-    (get_performance_rows resolves it once and reuses it for both the
-    `_quote_day_count` lookup and TWRR sub-period bounds).
-
-    `preloaded_quotes` (instrument's full quote history,
-    date<=end, ordered date/fetched_at asc, NO manual tiebreak) and
-    `preloaded_txns` (this holding's txns, date<=end, ordered date/created_at
-    asc) let the batched caller skip the per-holding _quotes_in_window /
-    _transactions_for_position DB round-trips. When omitted, the original DB
-    queries run so direct callers (closed.py) keep working unchanged.
+    `first_buy` is the caller-resolved first lot-source date (None means no
+    position). `quotes` is the instrument's preloaded quote history (date <=
+    end, ordered date/fetched_at asc, NO manual tiebreak — see
+    load_twrr_quotes). `txns` is the holding's preloaded txn list (ordered
+    date/created_at asc); every consumer below filters by date, so rows after
+    `end` are harmless.
     """
-    if first_buy is None:
-        first_buy = await _first_buy_date(session, account_id, instrument_id)
     if first_buy is None:
         return TwrrResult(None, False, None, "no_position", ())
 
     period_start = max(start, first_buy) if start is not None else first_buy
-    if preloaded_quotes is not None:
-        quotes = _quotes_in_window_from_preload(preloaded_quotes, period_start, end)
-    else:
-        quotes = await _quotes_in_window(session, instrument_id, period_start, end)
+    quotes = _quotes_in_window_from_preload(quotes, period_start, end)
     quote_days = {quote.date for quote in quotes}
     if len(quote_days) < 2:
         return TwrrResult(None, False, None, "insufficient_history", ())
@@ -349,14 +318,6 @@ async def calculate_twrr(
     if start_price is None or end_price is None:
         return TwrrResult(None, False, None, "missing_price", ())
 
-    if preloaded_txns is not None:
-        # _transactions_for_position filters date<=end; the preload is already
-        # date<=end for this holding (end == as_of), so use it directly.
-        txns = preloaded_txns
-    else:
-        txns = await _transactions_for_position(
-            session, account_id, instrument_id, end=end
-        )
     boundary_dates = tuple(
         sorted(
             {
@@ -452,10 +413,10 @@ async def get_performance_rows(
     # quote/txn queries into request-constant grouped loads. The batched results
     # are byte-identical to the per-holding helpers (see their docstrings).
     lot_basis_by_holding = await calculate_open_lot_basis_batch(session)
-    twrr_quotes_by_instrument = await _load_twrr_quotes(
+    twrr_quotes_by_instrument = await load_twrr_quotes(
         session, {instrument_id for _, instrument_id in holdings}, as_of
     )
-    twrr_txns_by_holding = await _load_twrr_transactions(session, as_of)
+    twrr_txns_by_holding = await load_twrr_transactions(session, as_of)
 
     from app.services.realized import get_realized_per_holding
 
@@ -468,14 +429,11 @@ async def get_performance_rows(
 
     rows: list[PerfRow] = []
     for account_id, instrument_id in holdings:
-        # Batched lot-basis lookup (request-constant) — identical value to the
-        # per-holding calculate_open_lot_basis. Fall back to the per-holding call
-        # only if a holding is somehow absent from the batch (defensive; the
-        # batch covers every (account, instrument) with a txn row).
+        # Batched lot-basis lookup (request-constant). The batch covers every
+        # (account, instrument) with a txn row, which is exactly where
+        # `holdings` comes from, so a missing key means no position.
         basis = lot_basis_by_holding.get((account_id, instrument_id))
-        if basis is None:
-            basis = await calculate_open_lot_basis(session, account_id, instrument_id)
-        if basis.open_quantity <= ZERO:
+        if basis is None or basis.open_quantity <= ZERO:
             continue
 
         account = accounts_by_id.get(account_id)
@@ -532,29 +490,21 @@ async def get_performance_rows(
         elif current_value is not None:
             percent_return = (current_value - open_buy_basis) / open_buy_basis
 
-        # Feed TWRR the preloaded quote/txn lists so its
-        # _quotes_in_window / _transactions_for_position round-trips are skipped.
         preloaded_quotes = twrr_quotes_by_instrument.get(instrument_id, [])
         preloaded_txns = twrr_txns_by_holding.get((account_id, instrument_id), [])
-        # Resolve first_buy_date once and reuse it for both the TWRR
-        # window resolution and the quote-day-count "all-timeframe" fallback.
-        # Avoids two redundant round-trips per holding under the `all`
-        # timeframe and removes a torn-read window where the two queries could
-        # disagree if a buy is inserted between them. Derived from the
-        # preloaded transactions (no query). Falls back to the DB helper only
-        # when the preload (bounded by date <= as_of) yields no positive buy.
+        # Resolve first_buy_date once from the preloaded transactions and reuse
+        # it for both the TWRR window and the quote-day-count fallback. Falls
+        # back to the DB helper only when the preload (bounded by date <=
+        # as_of) yields no positive lot source.
         first_buy_date = _first_buy_from_preload(preloaded_txns)
         if first_buy_date is None:
             first_buy_date = await _first_buy_date(session, account_id, instrument_id)
-        twrr = await calculate_twrr(
-            session,
-            account_id,
-            instrument_id,
+        twrr = calculate_twrr(
             start,
             as_of,
             first_buy=first_buy_date,
-            preloaded_quotes=preloaded_quotes,
-            preloaded_txns=preloaded_txns,
+            quotes=preloaded_quotes,
+            txns=preloaded_txns,
         )
         # quote-day count over the preloaded list — same inclusive [start, end]
         # bounds as the SQL COUNT(DISTINCT date).
@@ -604,35 +554,7 @@ async def get_performance_rows(
             )
         )
 
-    # Attribute realized_eur to a single representative row per
-    # instrument — the open row with the largest current_value — and leave
-    # ZERO on the other accounts. The realized service aggregates LotAlloc
-    # per instrument (it cannot today expose per-(account, instrument)
-    # realized totals), so emitting the same realized total on every account
-    # row holding that instrument double-counted realized gains for any
-    # instrument held in more than one account (e.g. USDC in Revolut and
-    # Bit2Me). Picking the largest-holding row makes the displayed total
-    # match the realized service's instrument total without duplication.
-    # Rows whose current_value is None (missing FX / no quote) sort last so
-    # a priced row wins; ties resolve by account_id for determinism.
-    best_row_idx_by_instrument: dict[str, int] = {}
-    for idx, row in enumerate(rows):
-        existing_idx = best_row_idx_by_instrument.get(row.instrument_id)
-        if existing_idx is None:
-            best_row_idx_by_instrument[row.instrument_id] = idx
-            continue
-        existing = rows[existing_idx]
-        existing_value = existing.current_value if existing.current_value is not None else Decimal("-1")
-        candidate_value = row.current_value if row.current_value is not None else Decimal("-1")
-        if candidate_value > existing_value or (
-            candidate_value == existing_value and row.account_id < existing.account_id
-        ):
-            best_row_idx_by_instrument[row.instrument_id] = idx
-
-    for instrument_id, best_idx in best_row_idx_by_instrument.items():
-        realized = realized_by_instrument.get(instrument_id, ZERO)
-        if realized != ZERO:
-            rows[best_idx] = replace(rows[best_idx], realized_eur=realized)
+    _attribute_realized(rows, realized_by_instrument)
 
     # Opt-in merge of closed positions for unified /compare AllocationDrill.
     # Closed rows are timeframe-invariant (final-period TWRR); we drop the timeframe param
@@ -645,99 +567,89 @@ async def get_performance_rows(
             display_currency=display_currency,
             tag_filter=tag_filter,
         )
-        for cr in closed_rows:
-            rows.append(
-                PerfRow(
-                    account_id=cr.account_id,
-                    account_name=cr.account_name,
-                    instrument_id=cr.instrument_id,
-                    instrument_symbol=cr.instrument_symbol,
-                    instrument_name=cr.instrument_name or "",
-                    instrument_type=cr.instrument_type,
-                    display_decimals=cr.display_decimals,
-                    risk_level=None,
-                    is_banked=False,
-                    quantity=cr.quantity,
-                    avg_cost=cr.avg_cost,
-                    current_price=None,
-                    current_price_fetched_at=None,
-                    percent_return=cr.percent_return,
-                    realized_eur=cr.realized_eur,
-                    twrr=cr.twrr,
-                    twrr_annualized=cr.twrr_annualized,
-                    twrr_period_days=cr.twrr_window_days,  # legacy field — backwards compat
-                    twrr_reason=None,
-                    open_buy_basis=ZERO,
-                    current_value=None,
-                    status="closed",
-                    last_close=cr.last_close,
-                    last_close_date=cr.last_close_date,
-                    twrr_window_days=cr.twrr_window_days,
-                )
-            )
+        rows.extend(_closed_to_perf_row(cr) for cr in closed_rows)
 
     return rows
 
 
-async def _transactions_for_position(
-    session: AsyncSession, account_id: str, instrument_id: str, end: date
-) -> list[Transaction]:
-    stmt = (
-        select(Transaction)
-        .where(
-            Transaction.account_id == account_id,
-            Transaction.instrument_id == instrument_id,
-            Transaction.date <= end,
-            Transaction.deleted_at.is_(None),
-        )
-        .order_by(Transaction.date.asc(), Transaction.created_at.asc())
+def _attribute_realized(
+    rows: list[PerfRow], realized_by_instrument: dict[str, Decimal]
+) -> None:
+    """Attribute realized_eur to a single representative row per instrument
+    (the open row with the largest current_value), leaving ZERO on the others.
+
+    The realized service aggregates LotAlloc per instrument (it cannot expose
+    per-(account, instrument) realized totals), so emitting the same realized
+    total on every account row holding that instrument would double-count
+    realized gains for an instrument held in more than one account. Rows whose
+    current_value is None (missing FX / no quote) sort last so a priced row
+    wins; ties resolve by account_id for determinism. Mutates `rows` in place.
+    """
+    best_row_idx_by_instrument: dict[str, int] = {}
+    for idx, row in enumerate(rows):
+        existing_idx = best_row_idx_by_instrument.get(row.instrument_id)
+        if existing_idx is None:
+            best_row_idx_by_instrument[row.instrument_id] = idx
+            continue
+        existing = rows[existing_idx]
+        unpriced = Decimal("-1")
+        existing_value = existing.current_value if existing.current_value is not None else unpriced
+        candidate_value = row.current_value if row.current_value is not None else unpriced
+        if candidate_value > existing_value or (
+            candidate_value == existing_value and row.account_id < existing.account_id
+        ):
+            best_row_idx_by_instrument[row.instrument_id] = idx
+
+    for instrument_id, best_idx in best_row_idx_by_instrument.items():
+        realized = realized_by_instrument.get(instrument_id, ZERO)
+        if realized != ZERO:
+            rows[best_idx] = replace(rows[best_idx], realized_eur=realized)
+
+
+def _closed_to_perf_row(cr) -> PerfRow:
+    """Adapt a ClosedPositionRow onto the PerfRow shape (status='closed')."""
+    return PerfRow(
+        account_id=cr.account_id,
+        account_name=cr.account_name,
+        instrument_id=cr.instrument_id,
+        instrument_symbol=cr.instrument_symbol,
+        instrument_name=cr.instrument_name or "",
+        instrument_type=cr.instrument_type,
+        display_decimals=cr.display_decimals,
+        risk_level=None,
+        is_banked=False,
+        quantity=cr.quantity,
+        avg_cost=cr.avg_cost,
+        current_price=None,
+        current_price_fetched_at=None,
+        percent_return=cr.percent_return,
+        realized_eur=cr.realized_eur,
+        twrr=cr.twrr,
+        twrr_annualized=cr.twrr_annualized,
+        twrr_period_days=cr.twrr_window_days,  # legacy field name on the response
+        twrr_reason=None,
+        open_buy_basis=ZERO,
+        current_value=None,
+        status="closed",
+        last_close=cr.last_close,
+        last_close_date=cr.last_close_date,
+        twrr_window_days=cr.twrr_window_days,
     )
-    result = await session.execute(stmt)
-    return list(result.scalars())
 
 
-async def _quotes_in_window(
-    session: AsyncSession, instrument_id: str, start: date, end: date
-) -> list[PriceQuote]:
-    stmt = (
-        select(PriceQuote)
-        .where(
-            PriceQuote.instrument_id == instrument_id,
-            PriceQuote.date >= start,
-            PriceQuote.date <= end,
-        )
-        .order_by(PriceQuote.date.asc(), PriceQuote.fetched_at.asc())
-    )
-    result = await session.execute(stmt)
-    return list(result.scalars())
-
-
-async def _quote_day_count(
-    session: AsyncSession, instrument_id: str, start: date, end: date
-) -> int:
-    stmt = select(func.count(func.distinct(PriceQuote.date))).where(
-        PriceQuote.instrument_id == instrument_id,
-        PriceQuote.date >= start,
-        PriceQuote.date <= end,
-    )
-    result = await session.execute(stmt)
-    return result.scalar_one()
-
-
-async def _load_twrr_quotes(
+async def load_twrr_quotes(
     session: AsyncSession, instrument_ids: set[str], as_of: date
 ) -> dict[str, list[PriceQuote]]:
     """Preload every instrument's quote history (date <= as_of) for TWRR.
 
     CRITICAL ORDERING (checker equivalence_safety): the ORDER BY here is
-    strictly (date asc, fetched_at asc) — the SAME as _quotes_in_window — and
-    deliberately OMITS the manual-source tiebreak that
-    quotes._load_quotes / networth._load_quotes insert
+    strictly (date asc, fetched_at asc) and deliberately OMITS the
+    manual-source tiebreak that quotes.load_quotes inserts
     (case((source=="manual",1),else_=0).asc()) between date and fetched_at.
     That tiebreak would change which same-date row lands last in the list, and
     _price_on_or_before picks eligible[-1], so a different same-date ordering
-    would select a DIFFERENT quote and silently break byte-identity. Do NOT add
-    the manual tiebreak here — match _quotes_in_window, not _load_quotes.
+    would select a DIFFERENT quote and silently break byte-identity. Do NOT
+    add the manual tiebreak here.
 
     Window filtering to [period_start, end] happens in Python per-call via
     _quotes_in_window_from_preload (inclusive both ends, matching the SQL).
@@ -757,7 +669,7 @@ async def _load_twrr_quotes(
     return by_instrument
 
 
-async def _load_twrr_transactions(
+async def load_twrr_transactions(
     session: AsyncSession, as_of: date
 ) -> dict[tuple[str, str], list[Transaction]]:
     """Preload every holding's transactions (date <= as_of) for TWRR.
@@ -792,14 +704,10 @@ def _quote_day_count_from_preload(
 
 
 def _first_buy_from_preload(txns: list[Transaction]) -> date | None:
-    """min(date) over positive buy/adjustment rows, mirroring
-    quotes.first_buy_date. The preload is bounded by date <= as_of, so a None
-    here does not prove the DB has no buys, callers must fall back."""
-    dates = [
-        t.date
-        for t in txns
-        if t.txn_type in ("buy", "adjustment") and t.quantity > Decimal("0")
-    ]
+    """min(date) over lot-source rows, mirroring quotes.first_buy_date. The
+    preload is bounded by date <= as_of, so a None here does not prove the DB
+    has no buys, callers must fall back."""
+    dates = [t.date for t in txns if is_lot_source(t.txn_type, t.quantity)]
     return min(dates) if dates else None
 
 
