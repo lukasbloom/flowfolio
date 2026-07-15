@@ -23,6 +23,12 @@ Path resolution:
 - Locally: uses /tmp/ for scratch
 - Output path: SEED_OUTPUT_PATH env var override, else auto-detected as
   tests/fixtures/golden.sqlite relative to the repo root (two levels above this script).
+
+Claim baking: SEED_BAKE_CLAIM=1 additionally writes the e2e admin claim
+(setup_complete + admin_password_hash) into the output, so the e2e golden
+fixture is born claimed and scripts/test_db_reset.sh stays a pure file swap.
+The Dockerfile demo-seed bake must NOT set it: the demo re-claims with the
+operator's APP_PASSWORD at boot/reset, and that pre-seed no-ops on a claimed DB.
 """
 from __future__ import annotations
 
@@ -49,6 +55,19 @@ FINAL_OUTPUT = Path(os.environ.get(
     "SEED_OUTPUT_PATH",
     str(_REPO_ROOT / "tests" / "fixtures" / "golden.sqlite"),
 ))
+
+# Opt-in e2e admin claim (see the module docstring). ON for the committed
+# golden fixture regen (`npm run test:e2e:regen-db` sets it), OFF by default
+# so the Dockerfile demo-seed bake keeps producing an UNCLAIMED seed.
+SEED_BAKE_CLAIM = os.environ.get("SEED_BAKE_CLAIM", "").strip().lower() in ("1", "true")
+
+# Fixed bcrypt hash of "test-password-e2e", the e2e stack password
+# (compose.test.yml APP_PASSWORD, frontend/tests/e2e/helpers/auth.ts
+# TEST_PASSWORD). Kept as a one-time hash_password("test-password-e2e")
+# constant instead of hashing at seed time so fixture regens stay
+# binary-stable (bcrypt salts fresh on every call, and verification accepts
+# any valid hash of the same password).
+E2E_ADMIN_HASH = "$2b$12$RnldAxd5dKYdezbvfpOqWea3oHOAU6umoWK3RtQaMSnkSDuDgImQu"
 
 
 def _run_alembic_against(scratch: Path) -> None:
@@ -211,6 +230,19 @@ async def _seed(scratch: Path) -> dict:
             sa_update(UserSetting).values(updated_at=FIXTURE_EPOCH)
         )
         await session.flush()
+
+        # 0b. E2E admin claim (opt-in via SEED_BAKE_CLAIM, see module docstring).
+        # Written with the frozen epoch so regens stay binary-stable. The demo
+        # bake must skip this block, its seed has to stay unclaimed.
+        if SEED_BAKE_CLAIM:
+            session.add(UserSetting(
+                key="setup_complete", value="true", updated_at=FIXTURE_EPOCH,
+            ))
+            session.add(UserSetting(
+                key="admin_password_hash", value=E2E_ADMIN_HASH,
+                updated_at=FIXTURE_EPOCH,
+            ))
+            await session.flush()
 
         # 1. Accounts (Pydantic-validated, find-or-create by name)
         account_id_by_name: dict[str, str] = {}
@@ -593,7 +625,11 @@ def main() -> int:
             dst.close()
     finally:
         src.close()
-    print(f"[seed-golden] wrote {FINAL_OUTPUT}: {counts}", flush=True)
+    print(
+        f"[seed-golden] wrote {FINAL_OUTPUT}: {counts} "
+        f"(e2e claim baked: {SEED_BAKE_CLAIM})",
+        flush=True,
+    )
     return 0
 
 

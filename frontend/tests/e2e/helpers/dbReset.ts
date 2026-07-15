@@ -25,10 +25,10 @@ const USE_DIRECT_DOCKER_EXEC = process.env.FLOWFOLIO_TEST_DB_RESET_DIRECT === "1
 // Resolve the repo root relative to this helper file (frontend/tests/e2e/helpers/ -> repo root)
 const REPO_ROOT = path.resolve(__dirname, "../../../../");
 
-// test_db_reset.sh resets the DB to golden AND re-applies the APP_PASSWORD
-// pre-seed (the committed golden is unclaimed, and the lifespan pre-seed only
-// runs once at boot — so the script re-claims the test password to keep the
-// storageState session valid; see that script's comment).
+// test_db_reset.sh is a pure file swap: the committed golden is baked CLAIMED
+// (setup_complete + the test-password-e2e hash, see SEED_BAKE_CLAIM in
+// scripts/seed-golden.py), so the swap alone keeps the storageState session
+// valid with no post-swap re-claim step.
 export async function resetGoldenDb(): Promise<void> {
   if (USE_DIRECT_DOCKER_EXEC) {
     // Fallback path — direct `docker exec`, bypasses compose's ~100ms fixed cost.
