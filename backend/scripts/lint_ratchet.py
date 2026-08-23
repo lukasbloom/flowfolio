@@ -20,6 +20,12 @@ def count_ruff_errors() -> int:
         capture_output=True,
         text=True,
     )
+    # Fail closed: ruff exits 0 (clean) or 1 (violations found). Anything else
+    # is a crashed run and must not be read as a count.
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"ruff exited {result.returncode}, refusing to count. stderr: {result.stderr}"
+        )
     violations = json.loads(result.stdout)
     return len(violations)
 
@@ -30,10 +36,21 @@ def count_mypy_errors() -> int:
         capture_output=True,
         text=True,
     )
+    # Fail closed: mypy exits 0 (clean) or 1 (type errors). Anything else is a
+    # crash or usage error and must not be read as zero errors.
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"mypy exited {result.returncode}, refusing to count. stderr: {result.stderr}"
+        )
+    if result.returncode == 0:
+        return 0
     match = re.search(r"Found (\d+) errors?", result.stdout)
-    if match:
-        return int(match.group(1))
-    return 0
+    if match is None:
+        raise RuntimeError(
+            "mypy exited 1 without a parseable 'Found N errors' summary. "
+            f"stdout: {result.stdout} stderr: {result.stderr}"
+        )
+    return int(match.group(1))
 
 
 def main() -> int:
