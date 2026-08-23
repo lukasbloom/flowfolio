@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { probeJson } from "./helpers/stackGate";
 
 /**
  * Demo-mode e2e: proves the three
@@ -25,8 +26,6 @@ import { test, expect } from "@playwright/test";
  * UAT because it requires the demo stack.
  */
 
-const BASE_URL = process.env.PW_BASE_URL ?? "http://localhost:8082";
-
 test.describe("public demo mode", () => {
   // This spec asserts demo-only surfaces, so it must only run against a demo
   // stack. Skip when /api/config reports the instance is not in demo mode,
@@ -34,16 +33,9 @@ test.describe("public demo mode", () => {
   // something that isn't the expected JSON. Both mean "wrong stack", not a
   // genuine assertion failure.
   test.beforeEach(async ({ request }) => {
-    let demo = false;
-    try {
-      const res = await request.get(`${BASE_URL}/api/config`, { timeout: 5_000 });
-      const body = (await res.json()) as { demo?: boolean };
-      demo = body.demo === true;
-    } catch {
-      demo = false;
-    }
+    const body = await probeJson<{ demo?: boolean }>(request, "/api/config");
     test.skip(
-      !demo,
+      body?.demo !== true,
       "instance is not in demo mode, unreachable, or a different stack entirely, demo e2e needs the compose.demo.yml stack",
     );
   });

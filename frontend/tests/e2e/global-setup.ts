@@ -1,8 +1,7 @@
 import { test as setup } from "@playwright/test";
 import { resetGoldenDb } from "./helpers/dbReset";
 import { TEST_PASSWORD } from "./helpers/auth";
-
-const STORAGE_STATE = "tests/e2e/.auth/storageState.json";
+import { STORAGE_STATE_PATH } from "./helpers/paths";
 
 /**
  * Hermetic-stack setup: resets the golden DB and stores an authenticated
@@ -17,5 +16,5 @@ setup("reset golden db and log in", async ({ page }) => {
   await page.getByLabel(/password/i).fill(TEST_PASSWORD);
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL(/\/track/);
-  await page.context().storageState({ path: STORAGE_STATE });
+  await page.context().storageState({ path: STORAGE_STATE_PATH });
 });

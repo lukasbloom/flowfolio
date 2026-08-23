@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { STORAGE_STATE_PATH } from "./tests/e2e/helpers/paths";
 
 /**
  * Playwright config for Flowfolio frontend e2e tests.
@@ -15,6 +16,20 @@ import { defineConfig, devices } from "@playwright/test";
  *   Dev:   docker compose -f compose.multi.yml -f compose.dev.yml up -d
  *   Test:  docker compose -f compose.yml -f compose.test.yml up -d
  */
+
+const HERMETIC_BASE_URL = process.env.PW_BASE_URL ?? "http://localhost:8091";
+
+// Shared by the snapshot and marketing projects: golden seed, frozen clock,
+// UTC, en-GB (match project formatRelativeHours decisions), test-stack
+// storageState.
+const hermeticChromeUse = {
+  ...devices["Desktop Chrome"],
+  timezoneId: "UTC",
+  locale: "en-GB",
+  storageState: STORAGE_STATE_PATH,
+  baseURL: HERMETIC_BASE_URL,
+};
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,          // Single-user app; tests share the same SQLite DB
@@ -40,7 +55,7 @@ export default defineConfig({
       name: "setup",
       testMatch: /(^|\/)global-setup\.ts$/,
       use: {
-        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8091",
+        baseURL: HERMETIC_BASE_URL,
       },
     },
     {
@@ -56,30 +71,18 @@ export default defineConfig({
       // so the spec .ts file and the baseline directory do not share the same parent
       // path (which would cause EEXIST trying to mkdir a name that is already a file).
       snapshotDir: "./tests/e2e/snapshots/__baselines__",
-      use: {
-        ...devices["Desktop Chrome"],
-        timezoneId: "UTC",
-        locale: "en-GB",                    // match project formatRelativeHours decisions
-        storageState: "tests/e2e/.auth/storageState.json",
-        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8091",
-      },
+      use: hermeticChromeUse,
     },
     {
       // Marketing-screenshot capture (05-01). Distinct testMatch (*.screenshots.spec.ts)
       // so it never collides with the *.snapshot.spec.ts baseline assertions. Reuses the
-      // snapshots-chromium settings (golden seed, frozen clock, UTC, en-GB, test stack
-      // storageState) but writes published PNGs to docs/screenshots/ instead of asserting.
-      // Per-test viewport (desktop 1440x900 vs mobile 390x844) is set inside the spec.
+      // snapshots-chromium settings but writes published PNGs to docs/screenshots/
+      // instead of asserting. Per-test viewport (desktop 1440x900 vs mobile 390x844)
+      // is set inside the spec.
       name: "marketing-chromium",
       testMatch: /.*\.screenshots\.spec\.ts/,
       dependencies: ["setup"],
-      use: {
-        ...devices["Desktop Chrome"],
-        timezoneId: "UTC",
-        locale: "en-GB",
-        storageState: "tests/e2e/.auth/storageState.json",
-        baseURL: process.env.PW_BASE_URL ?? "http://localhost:8091",
-      },
+      use: hermeticChromeUse,
     },
   ],
 });

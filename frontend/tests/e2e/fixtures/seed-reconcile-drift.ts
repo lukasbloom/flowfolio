@@ -1,4 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
+import { loginViaApi } from "../helpers/auth";
 
 export interface ReconcileSeedResult {
   accountId: string;
@@ -27,12 +28,7 @@ export async function seedReconcileDrift(
   password: string,
 ): Promise<ReconcileSeedResult> {
   // 1. Authenticate — APIRequestContext stores the session cookie automatically.
-  const loginResp = await api.post("/api/auth/login", { data: { password } });
-  if (!loginResp.ok()) {
-    throw new Error(
-      `Login failed (${loginResp.status()}): ${await loginResp.text()}`,
-    );
-  }
+  await loginViaApi(api, password);
 
   // 2. Create (or find) BTC instrument.
   const btcCreateResp = await api.post("/api/instruments", {

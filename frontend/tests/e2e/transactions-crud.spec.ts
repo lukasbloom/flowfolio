@@ -1,38 +1,13 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { requireAppPassword, loginViaUi } from "./helpers/functionalAuth";
+import { loginViaApi } from "./helpers/auth";
 
 /**
  * Transaction CRUD integration spec: create a buy, edit its quantity, then
- * delete it, all through the real UI against the mutable dev stack. The
- * instrument and account used are discovered at runtime from whatever the
- * dev DB has seeded (never hardcoded), so this spec stays valid regardless
- * of which portfolio data is loaded.
- *
- * One serial describe block: each test builds on the DB state the previous
- * one left behind (create -> edit -> delete), matching the app's
- * single-writer/workers:1 assumption.
- *
- * Selectors used (recon'd from the components, see Step 1 of plan 009):
- *   - Add trigger:            locator("#add-trigger")  (AddButton.tsx: stable id per its own comment.
- *                             Both the desktop button and the mobile FAB share the accessible name
- *                             "Add transaction", so role+name alone is ambiguous)
- *   - Type picker dialog:     getByRole("dialog") -> getByRole("menuitem", { name: "Buy" })  (AddTxnPicker.tsx)
- *   - Create form dialog:     getByRole("heading", { name: "Add buy" })  (AddTxnFormSheet.tsx TITLE_BY_TYPE)
- *   - Account field:          getByLabel("Account") -> getByRole("option", { name: <account> })  (TxnForm.tsx)
- *   - Instrument field:       getByLabel("Instrument") -> getByRole("option", { name: "<symbol> — <name>" })
- *   - Quantity field:         getByLabel("Quantity")
- *   - Unit price field:       getByLabel("Unit price")
- *   - Currency field:         getByLabel("Currency") -> getByRole("option", { name: "EUR" })
- *   - Submit (create):        getByRole("button", { name: "Save transaction" })
- *   - Success toast:          getByText(/Buy added/)
- *   - Ledger rows:            locator('[role="rowgroup"] [role="row"]')  (TxnList.tsx desktop grid)
- *   - Row cells (in order):   Date, Account, Instrument, Type, Qty, Price, FX, Notes, Actions
- *   - Row edit button:        getByRole("button", { name: "Edit transaction" })  (TxnRowActions.tsx)
- *   - Edit dialog heading:    getByRole("heading", { name: "Edit buy" })  (EditTxnDialog.tsx TITLE_BY_TYPE_EDIT)
- *   - Submit (edit):          getByRole("button", { name: "Save changes" })
- *   - Row delete button:      getByRole("button", { name: "Delete transaction" })  (TxnRowActions.tsx)
- *   - Delete confirm dialog:  getByRole("heading", { name: "Delete this transaction?" }) -> getByRole("button", { name: "Delete", exact: true })  (DeleteConfirmDialog.tsx)
- *   - Delete toast:           getByText("Transaction deleted.")
+ * delete it, all through the real UI against the mutable dev stack. One
+ * serial describe: each test builds on the DB state the previous one left
+ * behind, and the instrument/account are discovered at runtime from
+ * whatever the dev DB has seeded.
  *
  * Pre-requisites for running:
  *   1. Dev compose stack: docker compose -f compose.multi.yml -f compose.dev.yml up -d
@@ -53,21 +28,13 @@ interface Account {
   name: string;
 }
 
-async function loginApi(request: APIRequestContext, password: string): Promise<void> {
-  const resp = await request.post("/api/auth/login", { data: { password } });
-  if (!resp.ok()) {
-    throw new Error(`API login failed (${resp.status()}): ${await resp.text()}`);
-  }
-}
-
 test.describe.serial("transactions CRUD", () => {
   let instrument: Instrument;
   let account: Account;
   let createdTxnId: string | null = null;
 
   test.beforeAll(async ({ request }) => {
-    const password = requireAppPassword();
-    await loginApi(request, password);
+    await loginViaApi(request, requireAppPassword());
 
     const instrumentsResp = await request.get("/api/instruments");
     if (!instrumentsResp.ok()) {
@@ -98,18 +65,19 @@ test.describe.serial("transactions CRUD", () => {
     account = accounts[0];
   });
 
-  test("creates a buy transaction and it appears in the ledger", async ({ page }) => {
-    const password = requireAppPassword();
-    await loginViaUi(page, password);
-
+  test.beforeEach(async ({ page }) => {
+    await loginViaUi(page);
     await page.goto("/activity");
+  });
+
+  test("creates a buy transaction and it appears in the ledger", async ({ page }) => {
     await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible({
       timeout: 10_000,
     });
 
     // Open the Add-transaction picker, choose "Buy". #add-trigger is the
     // desktop button (the mobile FAB shares the same accessible name, so
-    // role+name alone would be ambiguous, see the header comment).
+    // role+name alone would be ambiguous).
     await page.locator("#add-trigger").click();
     const picker = page.getByRole("dialog");
     await expect(picker).toBeVisible({ timeout: 10_000 });
@@ -165,10 +133,6 @@ test.describe.serial("transactions CRUD", () => {
   });
 
   test("edits the quantity and the ledger reflects it", async ({ page }) => {
-    const password = requireAppPassword();
-    await loginViaUi(page, password);
-
-    await page.goto("/activity");
     const firstRow = page.locator('[role="rowgroup"] [role="row"]').first();
     await expect(firstRow).toBeVisible({ timeout: 10_000 });
     await expect(firstRow.locator('[role="cell"]').nth(4)).toHaveText("1");
@@ -200,10 +164,6 @@ test.describe.serial("transactions CRUD", () => {
   });
 
   test("deletes the transaction and it disappears from the ledger", async ({ page }) => {
-    const password = requireAppPassword();
-    await loginViaUi(page, password);
-
-    await page.goto("/activity");
     const rows = page.locator('[role="rowgroup"] [role="row"]');
     const firstRow = rows.first();
     await expect(firstRow).toBeVisible({ timeout: 10_000 });
@@ -240,8 +200,7 @@ test.describe.serial("transactions CRUD", () => {
     // UI delete never ran, remove the leftover transaction via the API. A
     // 404 means it is already gone (soft-deleted or never existed), which is fine.
     if (!createdTxnId) return;
-    const password = requireAppPassword();
-    await loginApi(request, password);
+    await loginViaApi(request, requireAppPassword());
     const resp = await request.delete(`/api/transactions/${createdTxnId}`);
     if (!resp.ok() && resp.status() !== 404) {
       console.warn(

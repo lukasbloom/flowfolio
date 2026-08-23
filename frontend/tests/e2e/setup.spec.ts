@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { probeJson } from "./helpers/stackGate";
 
 /**
  * First-run wizard e2e: proves the bootstrap flow on an UNCLAIMED instance.
@@ -25,7 +26,6 @@ import { test, expect } from "@playwright/test";
  * never picks it up; under the chromium project it skips on a claimed stack.
  */
 
-const BASE_URL = process.env.PW_BASE_URL ?? "http://localhost:8080";
 // A fresh, sufficiently strong password (backend ClaimRequest min_length=8).
 const SETUP_PASSWORD = "setup-pass-1234";
 
@@ -36,16 +36,9 @@ test.describe("first-run setup wizard", () => {
   // returns something that isn't the expected JSON. Both mean "wrong stack",
   // not a genuine assertion failure. Default to the safe (gated) side.
   test.beforeEach(async ({ request }) => {
-    let claimed = true;
-    try {
-      const res = await request.get(`${BASE_URL}/api/setup/status`, { timeout: 5_000 });
-      const body = (await res.json()) as { claimed?: boolean };
-      claimed = body.claimed !== false;
-    } catch {
-      claimed = true;
-    }
+    const body = await probeJson<{ claimed?: boolean }>(request, "/api/setup/status");
     test.skip(
-      claimed,
+      body?.claimed !== false,
       "instance already claimed, unreachable, or a different stack entirely, wizard e2e needs a clean-volume unclaimed boot",
     );
   });

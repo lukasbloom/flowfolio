@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { seedReconcileDrift } from "./fixtures/seed-reconcile-drift";
+import { requireAppPassword, loginViaUi } from "./helpers/functionalAuth";
 
 /**
  * Reconciliation-polish integration spec.
@@ -15,39 +16,23 @@ import { seedReconcileDrift } from "./fixtures/seed-reconcile-drift";
  * Snapshot qty input (snap "0" → phantom; snap ≠ app → qty_drift).
  *
  * Pre-requisites for running:
- *   1. Dev compose stack: docker compose -f compose.yml -f compose.dev.yml up -d
+ *   1. Dev compose stack: docker compose -f compose.multi.yml -f compose.dev.yml up -d
  *   2. PW_APP_PASSWORD env var set to the same value as APP_PASSWORD in .env
  *      (or APP_PASSWORD is exported in the shell running the test)
  *
  * Run: cd frontend && npm run test:e2e -- reconciliation-polish
  */
 
-// Password is read from env, never hardcoded.
-const APP_PASSWORD = process.env.PW_APP_PASSWORD ?? process.env.APP_PASSWORD ?? "";
-
-function requirePassword(): string {
-  if (!APP_PASSWORD) {
-    throw new Error(
-      "PW_APP_PASSWORD (or APP_PASSWORD) env var is not set. " +
-        "Export it before running e2e tests: export PW_APP_PASSWORD=<your-password>",
-    );
-  }
-  return APP_PASSWORD;
-}
-
 test.describe("RECP: reconciliation polish", () => {
   test("phantom row shows a disabled Accept button + tooltip", async ({
     page,
     request,
   }) => {
-    const password = requirePassword();
+    const password = requireAppPassword();
     const seed = await seedReconcileDrift(request, password);
 
     // Authenticate the browser context (separate cookie jar from `request`).
-    await page.goto("/login");
-    await page.getByLabel(/password/i).fill(password);
-    await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/track/, { timeout: 10_000 });
+    await loginViaUi(page, password);
 
     // Go straight to the reconcile flow for the seeded account.
     await page.goto(`/reconcile?account=${seed.accountId}`);
@@ -100,16 +85,13 @@ test.describe("RECP: reconciliation polish", () => {
     page,
     request,
   }) => {
-    const password = requirePassword();
+    const password = requireAppPassword();
     const seed = await seedReconcileDrift(request, password);
 
     // ~1483px is the reported clip point.
     await page.setViewportSize({ width: 1483, height: 900 });
 
-    await page.goto("/login");
-    await page.getByLabel(/password/i).fill(password);
-    await page.getByRole("button", { name: /sign in/i }).click();
-    await expect(page).toHaveURL(/\/track/, { timeout: 10_000 });
+    await loginViaUi(page, password);
 
     await page.goto(`/reconcile?account=${seed.accountId}`);
     await expect(

@@ -1,4 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
+import { loginViaApi } from "../helpers/auth";
 
 export interface SeedResult {
   ethId: string;
@@ -30,10 +31,7 @@ export async function seedMultiAccountEth(
 ): Promise<SeedResult> {
   // 1. Authenticate — Playwright APIRequestContext stores cookies automatically
   //    so all subsequent calls in this context carry the session cookie.
-  const loginResp = await api.post("/api/auth/login", { data: { password } });
-  if (!loginResp.ok()) {
-    throw new Error(`Login failed (${loginResp.status()}): ${await loginResp.text()}`);
-  }
+  await loginViaApi(api, password);
 
   // 2. Create (or find) ETH instrument.
   //    price_source="coingecko" is the canonical source for crypto (instrument_type="crypto").

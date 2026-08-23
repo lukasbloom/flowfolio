@@ -2,10 +2,8 @@ import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 
 /**
- * Shared login helper for FUNCTIONAL specs running against the mutable dev
+ * Shared login helpers for FUNCTIONAL specs running against the mutable dev
  * compose stack (localhost:8083), never the hermetic snapshot stack.
- * Extracted from the login steps duplicated across instruments-nav.spec.ts,
- * apy-deep-link.spec.ts, and reconciliation-polish.spec.ts.
  */
 
 /**
@@ -25,9 +23,12 @@ export function requireAppPassword(): string {
 
 /**
  * Logs into the app via the UI login form and waits for the post-login
- * redirect to /track.
+ * redirect to /track. Resolves the password from env unless one is passed.
  */
-export async function loginViaUi(page: Page, password: string): Promise<void> {
+export async function loginViaUi(
+  page: Page,
+  password: string = requireAppPassword(),
+): Promise<void> {
   await page.goto("/login");
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();

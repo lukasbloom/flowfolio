@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { seedMultiAccountEth } from "./fixtures/seed-multi-account-eth";
+import { requireAppPassword, loginViaUi } from "./helpers/functionalAuth";
 
 /**
  * Integration test: multi-account-same-instrument ActionBanner deep-link.
@@ -11,7 +12,7 @@ import { seedMultiAccountEth } from "./fixtures/seed-multi-account-eth";
  *   - Clicking "Edit APY source" MUST deep-link to Revolut Earn (NOT Cold Wallet)
  *
  * Pre-requisites for running:
- *   1. Dev compose stack: docker compose -f compose.yml -f compose.dev.yml up -d
+ *   1. Dev compose stack: docker compose -f compose.multi.yml -f compose.dev.yml up -d
  *   2. PW_APP_PASSWORD env var set to the same value as APP_PASSWORD in .env
  *      (or APP_PASSWORD is exported in the shell running the test)
  *
@@ -19,32 +20,20 @@ import { seedMultiAccountEth } from "./fixtures/seed-multi-account-eth";
  * Headed: cd frontend && npm run test:e2e:headed -- apy-deep-link
  */
 
-// Password is read from env, never hardcoded.
-const APP_PASSWORD = process.env.PW_APP_PASSWORD ?? process.env.APP_PASSWORD ?? "";
-
 test.describe("auto-accrual yield ActionBanner deep-link", () => {
   test("lands on the correct account row (Revolut Earn, not Cold Wallet)", async ({
     page,
     request,
   }) => {
-    if (!APP_PASSWORD) {
-      throw new Error(
-        "PW_APP_PASSWORD (or APP_PASSWORD) env var is not set. " +
-          "Export it before running e2e tests: export PW_APP_PASSWORD=<your-password>",
-      );
-    }
+    const password = requireAppPassword();
 
     // ── 1. Seed the multi-account fixture via API ──────────────────────────────
-    const seed = await seedMultiAccountEth(request, APP_PASSWORD);
+    const seed = await seedMultiAccountEth(request, password);
 
     // ── 2. Authenticate the browser context ───────────────────────────────────
     //    The `request` fixture and `page` fixture have separate cookie jars, so
     //    we need to log in via the browser too.
-    await page.goto("/login");
-    await page.getByLabel(/password/i).fill(APP_PASSWORD);
-    await page.getByRole("button", { name: /sign in/i }).click();
-    // Middleware redirects / → /track after login.
-    await expect(page).toHaveURL(/\/track/, { timeout: 10_000 });
+    await loginViaUi(page, password);
 
     // ── 3. Navigate to /activity and find the seeded auto-accrual yield row ───
     await page.goto("/activity");
