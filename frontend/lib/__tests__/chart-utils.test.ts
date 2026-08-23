@@ -5,19 +5,25 @@ import assert from "node:assert/strict";
 // (lib/__tests__ is excluded from tsconfig.json), run via
 // `node --test --experimental-strip-types`.
 import {
+  CHART_FONT_FAMILY,
   mutedAxisLabel,
   timeXAxis,
   tooltipShell,
   valueYAxis,
 } from "../chart-utils.ts";
 
-// Literal values mirror components/charts/palette.ts (ACCENT/MUTED/BORDER).
-// Freezing them here as plain strings (rather than importing the palette)
-// pins the actual rendered hex the four charts share, the same contract
-// plan 014 centralized.
+// Literal values mirror components/charts/palette.ts (ACCENT/MUTED/BORDER)
+// and the CHART_FONT_FAMILY stack in chart-utils.ts. Freezing them here as
+// plain strings (rather than importing the source constants) pins the actual
+// rendered values the four charts share.
 const ACCENT = "#262626";
 const MUTED = "#737373";
 const BORDER = "#E5E5E5";
+const FONT = "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+test("CHART_FONT_FAMILY pins the shared chart font stack", () => {
+  assert.equal(CHART_FONT_FAMILY, FONT);
+});
 
 test("tooltipShell(axis) matches the shared tooltip container shape", () => {
   assert.deepEqual(tooltipShell("axis"), {
@@ -25,7 +31,7 @@ test("tooltipShell(axis) matches the shared tooltip container shape", () => {
     backgroundColor: "#FFFFFF",
     borderColor: BORDER,
     borderWidth: 1,
-    textStyle: { color: ACCENT, fontSize: 14, fontFamily: "Inter, system-ui, sans-serif" },
+    textStyle: { color: ACCENT, fontSize: 14, fontFamily: FONT },
     padding: [8, 12],
   });
 });
@@ -36,7 +42,7 @@ test("tooltipShell(item) only differs in trigger", () => {
     backgroundColor: "#FFFFFF",
     borderColor: BORDER,
     borderWidth: 1,
-    textStyle: { color: ACCENT, fontSize: 14, fontFamily: "Inter, system-ui, sans-serif" },
+    textStyle: { color: ACCENT, fontSize: 14, fontFamily: FONT },
     padding: [8, 12],
   });
 });

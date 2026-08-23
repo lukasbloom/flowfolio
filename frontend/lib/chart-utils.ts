@@ -9,6 +9,10 @@
 // `allowImportingTsExtensions` keeps tsc/Next happy with the same import.
 import { ACCENT, BORDER, MUTED } from "../components/charts/palette.ts";
 
+/** Font stack shared by every ECharts textStyle in the app. */
+export const CHART_FONT_FAMILY =
+  "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
 /**
  * Escape a string for safe interpolation into an ECharts tooltip's innerHTML.
  * ECharts tooltip formatters emit raw HTML, so any
@@ -49,7 +53,7 @@ export function tooltipShell(trigger: "axis" | "item"): Record<string, unknown> 
     textStyle: {
       color: ACCENT,
       fontSize: 14,
-      fontFamily: "Inter, system-ui, sans-serif",
+      fontFamily: CHART_FONT_FAMILY,
     },
     padding: [8, 12],
   };

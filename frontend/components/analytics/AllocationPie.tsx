@@ -17,7 +17,7 @@ import { formatMoney, instrumentTypeLabel } from "@/lib/format";
 import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { ACCENT, MUTED, PIE_PALETTE } from "@/components/charts/palette";
-import { tooltipShell } from "@/lib/chart-utils";
+import { CHART_FONT_FAMILY, tooltipShell } from "@/lib/chart-utils";
 
 echarts.use([PieChart, TooltipComponent, LegendComponent, CanvasRenderer]);
 
@@ -70,7 +70,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
       backgroundColor: "transparent",
       animation: true,
       textStyle: {
-        fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+        fontFamily: CHART_FONT_FAMILY,
         fontSize: 12,
         color: MUTED,
       },
@@ -82,7 +82,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
         top: "middle",
         icon: "circle",
         textStyle: {
-          fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+          fontFamily: CHART_FONT_FAMILY,
           fontSize: 12,
           color: MUTED,
         },
@@ -156,7 +156,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
             top: -12,
             style: {
               text: formatMoney(data.total, currency as "EUR" | "USD"),
-              font: "600 18px Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+              font: `600 18px ${CHART_FONT_FAMILY}`,
               fill: "#171717",
               textAlign: "center",
               textVerticalAlign: "middle",
@@ -167,7 +167,7 @@ export function AllocationPie({ dimension, title, onSliceClick }: AllocationPieP
             top: 10,
             style: {
               text: "Total",
-              font: "12px Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+              font: `12px ${CHART_FONT_FAMILY}`,
               fill: MUTED,
               textAlign: "center",
               textVerticalAlign: "middle",

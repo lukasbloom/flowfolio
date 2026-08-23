@@ -27,7 +27,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { NwTimeframe } from "@/components/networth/timeframe";
 import { CustomRangeEmpty } from "@/components/charts/CustomRangeEmpty";
 import { ACCENT, LINE_PALETTE, MUTED, NEGATIVE, POSITIVE } from "@/components/charts/palette";
-import { escapeHtml, timeXAxis, toIsoDate, tooltipShell, valueYAxis } from "@/lib/chart-utils";
+import { CHART_FONT_FAMILY, escapeHtml, timeXAxis, toIsoDate, tooltipShell, valueYAxis } from "@/lib/chart-utils";
 
 interface InstrumentLite {
   id: string;
@@ -334,7 +334,7 @@ export function NetWorthChart({
           }
         : { show: false },
       textStyle: {
-        fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+        fontFamily: CHART_FONT_FAMILY,
         fontSize: 12,
         color: MUTED,
       },

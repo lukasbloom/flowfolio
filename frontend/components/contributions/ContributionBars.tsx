@@ -22,7 +22,7 @@ import { formatCompactMoney, formatMoney } from "@/lib/format";
 import { ChartSkeleton } from "@/components/charts/ChartSkeleton";
 import { Button } from "@/components/ui/button";
 import { ACCENT, MUTED, BORDER, CONTRIB_BAR_PALETTE } from "@/components/charts/palette";
-import { mutedAxisLabel, tooltipShell, valueYAxis } from "@/lib/chart-utils";
+import { CHART_FONT_FAMILY, mutedAxisLabel, tooltipShell, valueYAxis } from "@/lib/chart-utils";
 import { PeriodToggle } from "@/components/contributions/PeriodToggle";
 
 echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
@@ -80,7 +80,7 @@ export function ContributionBars() {
     return {
       backgroundColor: "transparent",
       textStyle: {
-        fontFamily: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+        fontFamily: CHART_FONT_FAMILY,
         fontSize: 12,
         color: MUTED,
       },
