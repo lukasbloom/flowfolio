@@ -187,13 +187,6 @@ def test_guard_allows_short_secret_key_in_development():
     )
 
 
-def test_guard_rejects_sub_8_char_app_password_in_production():
-    """A claimed instance with a weak APP_PASSWORD lingering in the env must
-    also be refused, not just the unclaimed pre-seed path."""
-    with pytest.raises(RuntimeError, match="shorter than 8 characters"):
-        assert_production_safety(_guard_settings(app_password="short7x"))
-
-
 def test_guard_allows_empty_app_password_in_production():
     """compose.yml's APP_PASSWORD=${APP_PASSWORD:-} arrives as an empty
     string, not None, on an unset host var. That is the unclaimed first-run
@@ -201,11 +194,8 @@ def test_guard_allows_empty_app_password_in_production():
     assert assert_production_safety(_guard_settings(app_password="")) is None
 
 
-def test_guard_allows_sub_8_char_app_password_in_development():
-    """The floor is a production-only guard, dev trials keep working."""
-    assert (
-        assert_production_safety(
-            _guard_settings(app_env="development", app_password="short7x")
-        )
-        is None
-    )
+def test_guard_leaves_app_password_floor_to_pre_seed():
+    """The APP_PASSWORD length floor moved to pre_seed_admin_password_from_env
+    (which runs during lifespan and raises for any set-but-short value). The
+    boot guard itself no longer rejects a short APP_PASSWORD."""
+    assert assert_production_safety(_guard_settings(app_password="short7x")) is None

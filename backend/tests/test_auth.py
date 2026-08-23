@@ -20,17 +20,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core import config as cfg_module
 from app.core.database import Base, attach_sqlite_pragmas, get_db
+from app.core.throttle import login_throttle
 from app.main import app, assert_production_safety
-from app.routers import auth as auth_router
 from tests.conftest import seed_admin_password
 
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
     """Clear the login throttle so a failed-password test can't leak a lockout."""
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
     yield
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
 
 
 @pytest_asyncio.fixture

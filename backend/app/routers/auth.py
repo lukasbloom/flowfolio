@@ -11,25 +11,25 @@ run before a session cookie exists.
 """
 from __future__ import annotations
 
-import time
-from dataclasses import dataclass
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import (
-    SESSION_COOKIE_NAME,
     check_password,
+    clear_session_cookie,
     create_pre_auth_token,
     create_session_token,
     hash_password,
+    set_session_cookie,
     validate_pre_auth_token,
 )
 from app.core.config import settings
+from app.core.constants import MIN_PASSWORD_LENGTH
 from app.core.database import get_db
 from app.core.deps import forbid_in_demo
+from app.core.throttle import login_throttle
 from app.services import totp
 from app.services.setup_state import (
     bump_token_epoch,
@@ -42,40 +42,6 @@ from app.services.setup_state import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-# Login brute-force throttle, keyed by client IP (single-user, single-worker,
-# so module state is safe, see scheduler.py WEB_CONCURRENCY=1 enforcement). Each
-# source IP gets its own counter so an unauthenticated third party cannot lock
-# the one legitimate owner out by trickling wrong passwords past a shared global
-# counter. Per-IP keying reproduces the old brute-force semantics within each
-# source (see _register_failure) while removing that cross-source denial of
-# service.
-#
-# Defense-in-depth limitation (accepted): this throttle is BEST-EFFORT and NOT
-# restart-durable. The per-IP table lives in module state, so any process
-# restart (the documented `uvicorn --reload` dev loop, a crash, a redeploy, or a
-# container restart) resets it. The real protection is the bcrypt-hashed
-# password; this lockout only slows online guessing between restarts. A DB-backed
-# counter (a user_setting row) would make it durable and is the natural future
-# hardening, but is deferred to avoid adding a write on every failed login for a
-# single-user box.
-_FAILURE_WINDOW_SECONDS = 600   # forget stale failures older than this
-_LOCKOUT_THRESHOLD = 5          # consecutive failures before lockout
-_LOCKOUT_SECONDS = 60           # base cooldown; doubles each subsequent failure
-_MAX_BACKOFF_EXPONENT = 6       # cap doubling at ~64 min
-_MAX_TRACKED_IPS = 1024         # bound the table; evict the stalest IP past this
-
-
-@dataclass
-class _ThrottleState:
-    """Per-IP brute-force counter: failure streak, lockout deadline, last-seen."""
-
-    failed_attempts: int = 0
-    locked_until: float = 0.0
-    last_failure_at: float = 0.0
-
-
-_throttle_by_ip: dict[str, _ThrottleState] = {}
 
 
 def _client_ip(request: Request) -> str:
@@ -92,46 +58,18 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _reset_rate_limiter(ip: str | None = None) -> None:
-    """Clear login-throttle state. No ip clears the whole table (tests, global
-    reset). An ip drops just that source's entry (a completed login)."""
-    if ip is None:
-        _throttle_by_ip.clear()
-    else:
-        _throttle_by_ip.pop(ip, None)
-
-
-def _register_failure(ip: str) -> None:
-    """Record a failed login for one source IP and arm its lockout once the
-    threshold trips. Thresholds, window, and backoff match the old global
-    limiter, now scoped per IP."""
-    now = time.monotonic()
-    # Opportunistic cleanup: drop entries whose streak has gone stale and whose
-    # lockout has passed, so the table does not grow without bound.
-    for key in [
-        k
-        for k, st in _throttle_by_ip.items()
-        if now - st.last_failure_at > _FAILURE_WINDOW_SECONDS and now >= st.locked_until
-    ]:
-        del _throttle_by_ip[key]
-
-    state = _throttle_by_ip.get(ip)
-    if state is None:
-        # Memory bound: evict the stalest tracked source before adding a new one.
-        if len(_throttle_by_ip) >= _MAX_TRACKED_IPS:
-            oldest = min(_throttle_by_ip, key=lambda k: _throttle_by_ip[k].last_failure_at)
-            del _throttle_by_ip[oldest]
-        state = _ThrottleState()
-        _throttle_by_ip[ip] = state
-
-    # Forget a stale failure streak so a slow trickle never accumulates a lockout.
-    if now - state.last_failure_at > _FAILURE_WINDOW_SECONDS:
-        state.failed_attempts = 0
-    state.last_failure_at = now
-    state.failed_attempts += 1
-    if state.failed_attempts >= _LOCKOUT_THRESHOLD:
-        exponent = min(state.failed_attempts - _LOCKOUT_THRESHOLD, _MAX_BACKOFF_EXPONENT)
-        state.locked_until = now + _LOCKOUT_SECONDS * (2 ** exponent)
+def _throttled_ip(request: Request) -> str:
+    """Dependency: resolve the client IP and reject with 429 while its login
+    lockout is active. Returns the IP for record_failure/reset calls."""
+    ip = _client_ip(request)
+    retry_after = login_throttle.retry_after(ip)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+    return ip
 
 
 class LoginRequest(BaseModel):
@@ -141,25 +79,14 @@ class LoginRequest(BaseModel):
 @router.post("/login")
 async def login(
     body: LoginRequest,
-    request: Request,
     response: Response,
+    ip: str = Depends(_throttled_ip),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Verify password; on success set HTTP-only session cookie."""
-    ip = _client_ip(request)
-    now = time.monotonic()
-    state = _throttle_by_ip.get(ip)
-    if state is not None and now < state.locked_until:
-        retry_after = int(state.locked_until - now) + 1
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts; try again later",
-            headers={"Retry-After": str(retry_after)},
-        )
-
     if not await check_password(session, body.password):
         # Do NOT echo the attempted password in any log line.
-        _register_failure(ip)
+        login_throttle.record_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid password")
 
     if await is_totp_enabled(session):
@@ -176,18 +103,10 @@ async def login(
     # Successful login clears this IP's brute-force counter and lockout. Only
     # the caller's entry is dropped, so an attacker's armed lockout on another
     # source IP is untouched by the owner logging in.
-    _reset_rate_limiter(ip)
+    login_throttle.reset(ip)
 
     epoch = await get_token_epoch(session)
-    token = create_session_token(epoch)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,                         # XSS: JS cannot read cookie
-        samesite="strict",                     # CSRF protection (strict: no cross-site send)
-        secure=settings.app_env == "production",  # HTTPS-only in prod (Caddy)
-        max_age=settings.session_expire_seconds,
-    )
+    set_session_cookie(response, create_session_token(epoch))
     return {"status": "ok"}
 
 
@@ -199,47 +118,29 @@ class TwoFactorLoginRequest(BaseModel):
 @router.post("/login/2fa")
 async def login_2fa(
     body: TwoFactorLoginRequest,
-    request: Request,
     response: Response,
+    ip: str = Depends(_throttled_ip),
     session: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     """Second step of two-step login: verify the pre-auth token + TOTP code.
 
-    Shares the same per-IP brute-force throttle as /login (`_throttle_by_ip`
-    via `_register_failure`/`_reset_rate_limiter`), so within one source IP a
-    lockout armed by repeated wrong codes here also blocks the password step,
-    and vice versa. This route is listed in AUTH_EXEMPT_PATHS.
+    Shares the same per-IP brute-force throttle as /login (login_throttle),
+    so within one source IP a lockout armed by repeated wrong codes here also
+    blocks the password step, and vice versa. This route is listed in
+    AUTH_EXEMPT_PATHS.
     """
-    ip = _client_ip(request)
-    now = time.monotonic()
-    state = _throttle_by_ip.get(ip)
-    if state is not None and now < state.locked_until:
-        retry_after = int(state.locked_until - now) + 1
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts; try again later",
-            headers={"Retry-After": str(retry_after)},
-        )
-
     secret = await get_totp_secret(session)
     if (
         not validate_pre_auth_token(body.pre_auth_token)
         or not secret
         or not totp.verify_code(secret, body.code)
     ):
-        _register_failure(ip)
+        login_throttle.record_failure(ip)
         raise HTTPException(status_code=401, detail="Invalid code")
 
-    _reset_rate_limiter(ip)
+    login_throttle.reset(ip)
     epoch = await get_token_epoch(session)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=create_session_token(epoch),
-        httponly=True,
-        samesite="strict",
-        secure=settings.app_env == "production",
-        max_age=settings.session_expire_seconds,
-    )
+    set_session_cookie(response, create_session_token(epoch))
     return {"status": "ok"}
 
 
@@ -271,23 +172,17 @@ async def change_password(
     """
     if not await check_password(session, body.current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(body.new_password) < 8:
+    if len(body.new_password) < MIN_PASSWORD_LENGTH:
         raise HTTPException(
-            status_code=422, detail="New password must be at least 8 characters"
+            status_code=422,
+            detail=f"New password must be at least {MIN_PASSWORD_LENGTH} characters",
         )
     await set_admin_password_hash(session, hash_password(body.new_password))
     new_epoch = await bump_token_epoch(session)
     await session.commit()
     # Keep the middleware's cached epoch coherent without a process restart.
     request.app.state.token_epoch = new_epoch
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=create_session_token(new_epoch),
-        httponly=True,
-        samesite="strict",
-        secure=settings.app_env == "production",
-        max_age=settings.session_expire_seconds,
-    )
+    set_session_cookie(response, create_session_token(new_epoch))
     return {"status": "ok"}
 
 
@@ -380,33 +275,14 @@ async def demo_login() -> RedirectResponse:
     if not settings.demo_mode:
         raise HTTPException(status_code=404, detail="Not found")
 
-    token = create_session_token(0)
     response = RedirectResponse(url="/track", status_code=303)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="strict",
-        secure=settings.app_env == "production",
-        max_age=settings.session_expire_seconds,
-    )
+    set_session_cookie(response, create_session_token(0))
     return response
 
 
 @router.post("/logout")
 async def logout(response: Response) -> dict[str, str]:
-    """Clear the session cookie.
-
-    The deletion cookie must carry the SAME attributes the login cookie was set
-    with (path, httponly, samesite, and secure), or browsers may not
-    treat it as overwriting the existing secure/strict cookie, leaving the user
-    still authenticated after a "successful" logout.
-    """
-    response.delete_cookie(
-        key=SESSION_COOKIE_NAME,
-        path="/",
-        httponly=True,
-        samesite="strict",
-        secure=settings.app_env == "production",
-    )
+    """Clear the session cookie (deletion attributes mirror the set path
+    structurally, see core.auth._session_cookie_attrs)."""
+    clear_session_cookie(response)
     return {"status": "ok"}

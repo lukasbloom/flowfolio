@@ -38,6 +38,17 @@ VALID_CURRENCIES = frozenset({"EUR", "USD"})
 # stable, deterministic alternation order.
 CURRENCY_PATTERN = "^(" + "|".join(sorted(VALID_CURRENCIES)) + ")$"
 
+# --- Passwords ------------------------------------------------------------------
+# Single length floor for every password entry path: the interactive setup claim
+# (setup.py Field min_length), the APP_PASSWORD boot pre-seed (setup_state.py),
+# and the in-app password change (auth.py).
+MIN_PASSWORD_LENGTH = 8
+APP_PASSWORD_TOO_SHORT_MESSAGE = (
+    f"APP_PASSWORD is shorter than {MIN_PASSWORD_LENGTH} characters. "
+    "The interactive setup enforces this minimum; the env pre-seed does too. "
+    "Set a longer APP_PASSWORD or unset it and claim the password via first-run setup."
+)
+
 # --- Timeframes ---------------------------------------------------------------
 # Preset lookback windows in days; None = unbounded ("all"). networth additionally
 # supports a "custom" window (resolved from explicit from/to dates), so it extends

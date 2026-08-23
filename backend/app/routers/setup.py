@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import SESSION_COOKIE_NAME, create_session_token
-from app.core.config import settings
+from app.core.auth import create_session_token, set_session_cookie
+from app.core.constants import MIN_PASSWORD_LENGTH
 from app.core.database import get_db
 from app.services.setup_state import (
     claim_admin_password,
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 
 class ClaimRequest(BaseModel):
     # V5 input validation: minimum length mirrors the claim-flow contract.
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH)
 
 
 @router.get("/status")
@@ -66,12 +66,5 @@ async def claim(
     # A freshly-claimed instance is always at epoch 0 (nothing has bumped it yet).
     epoch = await get_token_epoch(session)
     token = create_session_token(epoch)
-    response.set_cookie(
-        key=SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,                         # XSS: JS cannot read cookie
-        samesite="strict",                     # CSRF protection (strict: no cross-site send)
-        secure=settings.app_env == "production",  # HTTPS-only in prod (Caddy)
-        max_age=settings.session_expire_seconds,
-    )
+    set_session_cookie(response, token)
     return {"status": "ok"}

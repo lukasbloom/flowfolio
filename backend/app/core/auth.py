@@ -27,8 +27,10 @@ re-seed via APP_PASSWORD at boot).
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import jwt
+from fastapi import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -36,6 +38,34 @@ from app.core.security import hash_password, verify_password  # noqa: F401  (re-
 from app.services.setup_state import get_admin_password_hash
 
 SESSION_COOKIE_NAME = "session"
+
+
+def _session_cookie_attrs() -> dict[str, Any]:
+    """Cookie attributes shared by the set and clear paths. The deletion cookie
+    must mirror these exactly, or browsers may not treat it as overwriting the
+    existing secure/strict cookie, leaving the user still authenticated after a
+    "successful" logout."""
+    return {
+        "key": SESSION_COOKIE_NAME,
+        "path": "/",
+        "httponly": True,                            # XSS: JS cannot read cookie
+        "samesite": "strict",                        # CSRF protection (strict: no cross-site send)
+        "secure": settings.app_env == "production",  # HTTPS-only in prod (Caddy)
+    }
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    """Set the HTTP-only session cookie with the canonical attributes."""
+    response.set_cookie(
+        value=token,
+        max_age=settings.session_expire_seconds,
+        **_session_cookie_attrs(),
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    """Delete the session cookie with the same attributes it was set with."""
+    response.delete_cookie(**_session_cookie_attrs())
 ALGORITHM = "HS256"
 
 

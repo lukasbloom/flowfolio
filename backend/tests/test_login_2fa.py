@@ -27,8 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core import config as cfg_module
 from app.core.database import Base, attach_sqlite_pragmas, get_db
+from app.core.throttle import login_throttle
 from app.main import app
-from app.routers import auth as auth_router
 from tests.conftest import seed_admin_password
 
 GOOD = "test-password-123"
@@ -37,9 +37,9 @@ GOOD = "test-password-123"
 @pytest.fixture(autouse=True)
 def _reset_limiter():
     """Clear throttle state before and after every test so order can't leak."""
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
     yield
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
 
 
 @pytest_asyncio.fixture

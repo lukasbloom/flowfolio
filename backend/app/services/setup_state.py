@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.constants import APP_PASSWORD_TOO_SHORT_MESSAGE, MIN_PASSWORD_LENGTH
 from app.core.security import hash_password
 from app.models.user_setting import UserSetting
 
@@ -92,21 +93,19 @@ async def pre_seed_admin_password_from_env(
 ) -> None:
     """Pre-seed the admin password from APP_PASSWORD at boot.
 
-    No-op when app_password is falsy or the instance is already claimed, never
-    overwrites a password the user has already set. Caller owns the transaction.
-    Raises RuntimeError on an unclaimed instance when app_password is under the
-    8-char floor the interactive setup enforces (see setup.py's Field(min_length=8)).
+    No-op when app_password is falsy, and never overwrites a password the user
+    has already set. Caller owns the transaction. Raises RuntimeError whenever
+    a set app_password is under MIN_PASSWORD_LENGTH, even on an already-claimed
+    instance, so a weak env value never lingers silently. This is the single
+    enforcement point for the APP_PASSWORD floor (the interactive setup has its
+    own Field(min_length) mirror in setup.py).
     """
     if not app_password:
         return
+    if len(app_password) < MIN_PASSWORD_LENGTH:
+        raise RuntimeError(APP_PASSWORD_TOO_SHORT_MESSAGE)
     if await is_setup_complete(session):
         return
-    if len(app_password) < 8:
-        raise RuntimeError(
-            "APP_PASSWORD is shorter than 8 characters. The interactive setup "
-            "enforces this minimum; the env pre-seed does too. Set a longer "
-            "APP_PASSWORD or unset it and claim the password via first-run setup."
-        )
     # Fresh DB: the atomic gate insert wins, materializing the APP_PASSWORD
     # rows. The bool return is irrelevant here (boot is single-threaded and we
     # already confirmed the instance is unclaimed); never raises on a clean DB.

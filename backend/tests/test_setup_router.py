@@ -124,17 +124,17 @@ async def test_pre_seed_accepts_exactly_8_char_password(db_session):
 
 
 @pytest.mark.asyncio
-async def test_pre_seed_short_password_is_noop_on_already_claimed_db(db_session):
-    """An already-claimed instance returns before the length check, a short
-    env value lingering after a proper in-app password change cannot brick it."""
+async def test_pre_seed_short_password_raises_even_when_already_claimed(db_session):
+    """The length floor runs before the claimed early-return: a weak env value
+    lingering on a claimed instance refuses boot instead of passing silently.
+    The stored hash stays untouched."""
     await pre_seed_admin_password_from_env(db_session, "firstclaimpw")
     await db_session.commit()
     first_hash = await get_admin_password_hash(db_session)
 
-    # No RuntimeError even though "short" is under the floor: the early
-    # is_setup_complete return short-circuits before the length check.
-    await pre_seed_admin_password_from_env(db_session, "short")
-    await db_session.commit()
+    with pytest.raises(RuntimeError, match="shorter than 8 characters"):
+        await pre_seed_admin_password_from_env(db_session, "short")
+    await db_session.rollback()
     assert await get_admin_password_hash(db_session) == first_hash
 
 

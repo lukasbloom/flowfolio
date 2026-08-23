@@ -12,10 +12,10 @@ Validates, PER source IP:
 Plus the per-IP DoS fix: failures from one source never block a correct login
 from another, and the tracked-IP table is memory-bounded.
 
-The rate limiter is a per-IP table in module state (single-user, single-worker
-design), so every test resets it via the autouse fixture to stay isolated. The
-default ASGITransport peer is 127.0.0.1 (SYNTH_IP), so any request without an
-X-Forwarded-For header keys on that address.
+The rate limiter is the shared login_throttle instance (single-user,
+single-worker design), so every test clears it via the autouse fixture to stay
+isolated. The default ASGITransport peer is 127.0.0.1 (SYNTH_IP), so any
+request without an X-Forwarded-For header keys on that address.
 """
 from __future__ import annotations
 
@@ -29,8 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core import config as cfg_module
 from app.core.database import Base, attach_sqlite_pragmas, get_db
+from app.core.throttle import MAX_TRACKED_IPS, LoginThrottle, login_throttle
 from app.main import app
-from app.routers import auth as auth_router
 from tests.conftest import seed_admin_password
 
 GOOD = "test-password-123"
@@ -46,9 +46,9 @@ IP_B = "198.51.100.9"
 @pytest.fixture(autouse=True)
 def _reset_limiter():
     """Clear throttle state before and after every test so order can't leak."""
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
     yield
-    auth_router._reset_rate_limiter()
+    login_throttle.clear()
 
 
 @pytest_asyncio.fixture
@@ -107,7 +107,8 @@ async def test_lockout_expiry_allows_success_and_resets(client):
     """After the lockout window passes, the correct password succeeds and resets state."""
     for _ in range(5):
         await client.post("/api/auth/login", json={"password": BAD})
-    state = auth_router._throttle_by_ip[SYNTH_IP]
+    state = login_throttle.state(SYNTH_IP)
+    assert state is not None
     assert state.locked_until > time.monotonic()
 
     # Simulate the cooldown having elapsed.
@@ -117,7 +118,7 @@ async def test_lockout_expiry_allows_success_and_resets(client):
     assert resp.status_code == 200
     assert "session" in resp.cookies
     # Successful login drops this IP's entry entirely (all throttle state cleared).
-    assert SYNTH_IP not in auth_router._throttle_by_ip
+    assert login_throttle.state(SYNTH_IP) is None
 
 
 @pytest.mark.asyncio
@@ -126,13 +127,14 @@ async def test_below_threshold_then_success_resets(client):
     for _ in range(4):
         resp = await client.post("/api/auth/login", json={"password": BAD})
         assert resp.status_code == 401
-    state = auth_router._throttle_by_ip[SYNTH_IP]
+    state = login_throttle.state(SYNTH_IP)
+    assert state is not None
     assert state.failed_attempts == 4
     assert state.locked_until == 0.0  # not yet locked
 
     resp = await client.post("/api/auth/login", json={"password": GOOD})
     assert resp.status_code == 200
-    assert SYNTH_IP not in auth_router._throttle_by_ip
+    assert login_throttle.state(SYNTH_IP) is None
 
 
 @pytest.mark.asyncio
@@ -140,8 +142,8 @@ async def test_2fa_failures_lock_out_login(client):
     """5 failed /login/2fa attempts arm the shared lockout that blocks /login.
 
     /login/2fa checks the lockout before touching the pre-auth token or the
-    TOTP code, and calls _register_failure() on any bad request, so a garbage
-    body trips the same counter /login uses. No 2FA enrollment is needed.
+    TOTP code, and records a failure on any bad request, so a garbage body
+    trips the same counter /login uses. No 2FA enrollment is needed.
     """
     for _ in range(5):
         resp = await client.post(
@@ -176,7 +178,7 @@ async def test_login_failures_lock_out_2fa(client):
 async def test_correct_password_mid_2fa_does_not_reset_failure_streak(client):
     """A correct-password /login while 2FA is pending must NOT reset the streak.
 
-    Regression test: /login used to call _reset_rate_limiter() before checking
+    Regression test: /login used to reset the throttle before checking
     is_totp_enabled, so an attacker who already knows the password could wipe
     an in-progress /login/2fa failure streak between batches of TOTP guesses,
     and the lockout would never accumulate. This enrolls 2FA, racks up 4
@@ -210,16 +212,20 @@ async def test_correct_password_mid_2fa_does_not_reset_failure_streak(client):
             json={"pre_auth_token": "bad", "code": "000000"},
         )
         assert resp.status_code == 401
-    assert auth_router._throttle_by_ip[SYNTH_IP].failed_attempts == 4
-    assert auth_router._throttle_by_ip[SYNTH_IP].locked_until == 0.0
+    state = login_throttle.state(SYNTH_IP)
+    assert state is not None
+    assert state.failed_attempts == 4
+    assert state.locked_until == 0.0
 
     # Correct password mid-2FA: must return twofa_required and NOT reset
     # the failure streak (the whole point of this regression test).
     resp = await client.post("/api/auth/login", json={"password": GOOD})
     assert resp.status_code == 200, resp.text
     assert resp.json()["twofa_required"] == "true"
-    assert auth_router._throttle_by_ip[SYNTH_IP].failed_attempts == 4
-    assert auth_router._throttle_by_ip[SYNTH_IP].locked_until == 0.0
+    state = login_throttle.state(SYNTH_IP)
+    assert state is not None
+    assert state.failed_attempts == 4
+    assert state.locked_until == 0.0
 
     # One more failure is now the 5th and arms the lockout.
     resp = await client.post(
@@ -227,8 +233,10 @@ async def test_correct_password_mid_2fa_does_not_reset_failure_streak(client):
         json={"pre_auth_token": "bad", "code": "000000"},
     )
     assert resp.status_code == 401
-    assert auth_router._throttle_by_ip[SYNTH_IP].failed_attempts == 5
-    assert auth_router._throttle_by_ip[SYNTH_IP].locked_until > time.monotonic()
+    state = login_throttle.state(SYNTH_IP)
+    assert state is not None
+    assert state.failed_attempts == 5
+    assert state.locked_until > time.monotonic()
 
     # The next request is now blocked regardless of endpoint.
     resp = await client.post(
@@ -264,17 +272,19 @@ async def test_attacker_relock_does_not_block_owner(client):
         resp = await client.post("/api/auth/login", json={"password": BAD}, headers=a)
         assert resp.status_code == 401
     # Expire A's lock, then one more failure re-arms it inside the window.
-    auth_router._throttle_by_ip[IP_A].locked_until = time.monotonic() - 1.0
+    state_a = login_throttle.state(IP_A)
+    assert state_a is not None
+    state_a.locked_until = time.monotonic() - 1.0
     resp = await client.post("/api/auth/login", json={"password": BAD}, headers=a)
     assert resp.status_code == 401
-    assert auth_router._throttle_by_ip[IP_A].locked_until > time.monotonic()
+    assert state_a.locked_until > time.monotonic()
 
     # The owner from IP B is unaffected...
     resp = await client.post("/api/auth/login", json={"password": GOOD}, headers=b)
     assert resp.status_code == 200
     # ...and the owner's success only cleared B, so A stays locked.
-    assert IP_B not in auth_router._throttle_by_ip
-    assert auth_router._throttle_by_ip[IP_A].locked_until > time.monotonic()
+    assert login_throttle.state(IP_B) is None
+    assert state_a.locked_until > time.monotonic()
 
 
 @pytest.mark.asyncio
@@ -311,10 +321,12 @@ async def test_2fa_failures_lock_only_same_ip_login(client):
 
 
 def test_tracked_ip_table_is_bounded():
-    """Registering failures from more than _MAX_TRACKED_IPS distinct sources
+    """Registering failures from more than MAX_TRACKED_IPS distinct sources
     evicts the stalest entries so the table stays memory-bounded. Exercised at
-    the unit level: routing thousands of bcrypt-verified logins through HTTP
-    would add minutes for no extra coverage of the eviction path."""
-    for i in range(auth_router._MAX_TRACKED_IPS + 10):
-        auth_router._register_failure(f"10.0.{i // 256}.{i % 256}")
-    assert len(auth_router._throttle_by_ip) <= auth_router._MAX_TRACKED_IPS
+    the unit level on a fresh instance: routing thousands of bcrypt-verified
+    logins through HTTP would add minutes for no extra coverage of the
+    eviction path."""
+    throttle = LoginThrottle()
+    for i in range(MAX_TRACKED_IPS + 10):
+        throttle.record_failure(f"10.0.{i // 256}.{i % 256}")
+    assert throttle.tracked_ip_count <= MAX_TRACKED_IPS

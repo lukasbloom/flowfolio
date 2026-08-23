@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.database import Base, engine
 from app.core.http_guard import install_http_guard
 from app.middleware.auth_middleware import AuthMiddleware
@@ -33,7 +33,7 @@ from app.routers.transactions import router as transactions_router
 from app.services.scheduler import shutdown_scheduler, start_scheduler
 
 
-def ensure_secret_key(settings) -> None:  # type: ignore[no-untyped-def]
+def ensure_secret_key(settings: Settings) -> None:
     """Auto-generate and persist a strong SECRET_KEY on a clean volume.
 
     When SECRET_KEY is provided via env, do nothing — env overrides. Otherwise,
@@ -89,12 +89,16 @@ def ensure_secret_key(settings) -> None:  # type: ignore[no-untyped-def]
     settings.secret_key = key
 
 
-def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
+def assert_production_safety(settings: Settings) -> None:
     """Refuse to boot in production with dangerous defaults.
 
     Extracted as a standalone function so it can be unit-tested hermetically
     without standing up the full lifespan. Called from lifespan() at startup.
     """
+    # Every guard below is production-only. Dev/test convenience defaults pass.
+    if settings.app_env != "production":
+        return
+
     # Startup guard: refuse to boot if production accidentally has a pinned clock.
     # This combination is a copy/paste foot-gun from compose.test.yml — it would silently
     # serve the entire production app from "2026-04-30T12:00:00Z" until someone noticed.
@@ -102,7 +106,7 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
     # only exemption to this guard. The narrowing is scoped to the fixed_now check;
     # the default-secrets guard below is untouched — the demo still needs a real
     # auto-generated SECRET_KEY and a non-changeme APP_PASSWORD.
-    if settings.app_env == "production" and settings.fixed_now and not settings.demo_mode:
+    if settings.fixed_now and not settings.demo_mode:
         raise RuntimeError(
             "FLOWFOLIO_FIXED_NOW is set with APP_ENV=production. "
             "Refusing to boot — this combination is a copy/paste foot-gun from compose.test.yml. "
@@ -114,7 +118,7 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
     # app_password is now str | None: None is the acceptable unclaimed
     # first-run state (the setup wizard claims it), so only the LITERAL "changeme"
     # default is refused here.
-    if settings.app_env == "production" and (
+    if (
         settings.secret_key == "change-me-in-production"
         or settings.app_password == "changeme"
     ):
@@ -131,36 +135,15 @@ def assert_production_safety(settings) -> None:  # type: ignore[no-untyped-def]
     # Empty/unset stays governed by the default-value check above.
     # ensure_secret_key runs before this guard and always auto-generates a
     # 32+ byte key, so only a truthy, too-short, non-default value trips this
-    # check. Mirrors the APP_PASSWORD floor below.
-    if (
-        settings.app_env == "production"
-        and settings.secret_key
-        and len(settings.secret_key) < 32
-    ):
+    # check. The matching APP_PASSWORD floor lives in
+    # pre_seed_admin_password_from_env, which runs during lifespan and refuses
+    # a set-but-short APP_PASSWORD regardless of claim state.
+    if settings.secret_key and len(settings.secret_key) < 32:
         raise RuntimeError(
             "SECRET_KEY is shorter than 32 characters. A short HS256 key "
             "weakens every session token. Generate a strong one with: "
             'python -c "import secrets; print(secrets.token_urlsafe(48))" '
             "and set it in .env."
-        )
-
-    # Refuse a sub-8-char APP_PASSWORD in production. The interactive setup and
-    # the pre-seed both enforce this floor; this catches the case where the DB
-    # is already claimed but the operator keeps a weak APP_PASSWORD in the env
-    # expecting it to be authoritative.
-    # None or empty string means unclaimed, first-run wizard state, and must
-    # pass this guard, mirroring pre_seed_admin_password_from_env's `if not
-    # app_password: return` (compose.yml's `APP_PASSWORD=${APP_PASSWORD:-}`
-    # arrives as an empty string, not None, on an unset host var).
-    if (
-        settings.app_env == "production"
-        and settings.app_password
-        and len(settings.app_password) < 8
-    ):
-        raise RuntimeError(
-            "APP_PASSWORD is shorter than 8 characters. The interactive setup "
-            "enforces this minimum; the env pre-seed does too. Set a longer "
-            "APP_PASSWORD or unset it and claim the password via first-run setup."
         )
 
 
