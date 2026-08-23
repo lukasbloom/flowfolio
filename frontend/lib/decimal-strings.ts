@@ -84,7 +84,7 @@ export function decimalField(opts?: { positive?: boolean; message?: string }) {
  * at ≤ 2dp (float64 carries ~15-16 significant digits; portfolio values are
  * well inside that). NEVER use the result for equality checks, persistence,
  * or anything sent back to the API — use decimalStringsEqual / the raw
- * string for those. See plans/006 for the backend's exact-decimal contract.
+ * string for those.
  *
  * null / undefined / "" → 0. Note this differs from bare `Number(undefined)`
  * (which is NaN): every existing call site either pre-checks null/undefined
